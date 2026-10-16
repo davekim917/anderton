@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        # macos-latest runs the scripts under the system /bin/bash 3.2 and BSD userland they must support.
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Structure
+        run: /bin/bash test/structure.test.sh
+      - name: Scripts
+        run: /bin/bash test/scripts.test.sh
+      - name: shellcheck
+        if: runner.os == 'Linux'
+        run: shellcheck skills/anderton/scripts/*.sh test/*.sh
