@@ -102,7 +102,7 @@ holder_path() {
 # also match a later process given the same pid, so the start times must agree; a record written by
 # an earlier version has none, and then the process must have started before the claim.
 is_holder() {
-  [ -f "$1" ] && [ -f "$2" ] || return 1
+  if [ ! -f "$1" ] || [ ! -f "$2" ]; then return 1; fi
   jq -en --slurpfile reg "$1" --slurpfile rec "$2" '
     $reg[0] as $s | $rec[0] as $r
     | $s.pid == $r.pid

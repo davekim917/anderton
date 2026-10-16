@@ -11,6 +11,7 @@ permissions:
 jobs:
   test:
     strategy:
+      fail-fast: false
       matrix:
         # macos-latest runs the scripts under the system /bin/bash 3.2 and BSD userland they must support.
         os: [ubuntu-latest, macos-latest]

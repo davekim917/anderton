@@ -25,7 +25,7 @@ for s in "$sessions"/*.json; do
   IFS=$'\x1f' read -r pid start sid cwd name <<EOF
 $fields
 EOF
-  [ -n "$pid" ] && [ -n "$sid" ] || continue
+  if [ -z "$pid" ] || [ -z "$sid" ]; then continue; fi
   if [ -n "$record" ] && is_holder "$s" "$record"; then continue; fi
   if [ -z "$all" ] && { [ -z "$cwd" ] || [ "$(project_root "$cwd")" != "$root" ]; }; then
     continue
