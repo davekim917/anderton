@@ -141,3 +141,84 @@ project_holders() {
     if [ "$(jq -r 'select(.scope != null) | .root' "$f" 2>/dev/null || true)" = "$1" ]; then printf '%s\n' "$f"; fi
   done
 }
+
+# True once `claude agents` lists no session named $1, after waiting up to 5 seconds for one that is exiting.
+session_gone() {
+  local listed _
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    if listed=$(claude agents --json 2>/dev/null) &&
+      printf '%s' "$listed" | jq -e --arg n "$1" 'all(.[]; .name != $n)' >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.5
+  done
+  return 1
+}
+
+# Whether worker $4's tab or window stands in its server: prints present, absent, or unknown when the server's
+# answer cannot be read. $1 herdr|tmux, $2 the server's socket, $3 the tab or window id, $5 the tmux server's pid.
+# A restarted server reuses ids, so the tab or window must also carry the worker's name (the herdr label, the
+# tmux window name) and, for tmux, belong to the same server process; an id holding anything else is absent.
+place_state() {
+  local out
+  if [ -z "$2" ] || [ -z "$3" ]; then
+    echo unknown
+    return
+  fi
+  case $1 in
+    herdr)
+      if ! command -v herdr >/dev/null 2>&1; then
+        echo unknown
+      elif out=$(HERDR_SOCKET_PATH="$2" herdr tab get "$3" 2>&1); then
+        printf '%s' "$out" | jq -r --arg n "$4" '.result.tab.label as $l
+          | if $l == $n then "present" elif ($l | type) == "string" then "absent" else "unknown" end' 2>/dev/null ||
+          echo unknown
+      elif printf '%s' "$out" | jq -e '.error.code == "tab_not_found" or .error.code == "server_not_running"' >/dev/null 2>&1; then
+        echo absent
+      else
+        echo unknown
+      fi
+      ;;
+    tmux)
+      if ! command -v tmux >/dev/null 2>&1; then
+        echo unknown
+      elif out=$(tmux -S "$2" list-windows -a -F '#{pid} #{window_id} #{window_name}' 2>&1); then
+        if printf '%s\n' "$out" | awk -v p="${5:-}" -v w="$3" -v n="$4" '$2 == w && $3 == n && (p == "" || $1 == p) { f = 1 } END { exit !f }'; then
+          echo present
+        else
+          echo absent
+        fi
+      else
+        # A dead server leaves its socket file behind; tmux then says no server is running there.
+        case $out in
+          *"no server running"* | *"No such file or directory"*) echo absent ;;
+          *) echo unknown ;;
+        esac
+      fi
+      ;;
+    *) echo unknown ;;
+  esac
+}
+
+# True once worker $4's tab or window ($1 herdr|tmux, socket $2, id $3, tmux server pid $5) is absent from its
+# server, waiting up to 5 seconds, and no session named $4 is listed. A worker held at a startup prompt never
+# registers, so the session list alone would call it gone while its tab or window still runs.
+worker_gone() {
+  local _
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    if [ "$(place_state "$@")" = absent ]; then break; fi
+    sleep 0.5
+  done
+  [ "$(place_state "$@")" = absent ] && session_gone "$4"
+}
+
+# True when the session named $1, running in directory $2, is a worker spawn.sh started: the worker record of
+# that name exists and the session runs in its worktree. A worker reports to its spawner, not the user.
+is_worker() {
+  local f="$holders/workers/$1.json" dir
+  if [ -z "$1" ] || [ ! -f "$f" ]; then return 1; fi
+  dir=$(jq -r '.dir // empty' "$f" 2>/dev/null || true)
+  [ -n "$dir" ] || return 1
+  case $2 in "$dir" | "$dir"/*) return 0 ;; esac
+  return 1
+}

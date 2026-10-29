@@ -33,7 +33,7 @@ EOF
   done <<EOF
 $records
 EOF
-  if [ -n "$held" ]; then continue; fi
+  if [ -n "$held" ] || is_worker "$name" "$cwd"; then continue; fi
   if [ -z "$all" ] && { [ -z "$cwd" ] || [ "$(project_root "$cwd")" != "$root" ]; }; then
     continue
   fi
@@ -118,7 +118,7 @@ claude agents --json 2>/dev/null |
   jq -r '.[]? | select(.kind == "background" and (.state == "blocked" or .state == "done"))
     | [.name // "", .sessionId // "", .cwd // "", .state] | join("\u001f")' 2>/dev/null |
   while IFS=$'\x1f' read -r name sid cwd state; do
-    if [ -z "$sid" ] || [ -f "$holders/workers/$name.json" ]; then continue; fi
+    if [ -z "$sid" ] || is_worker "$name" "$cwd"; then continue; fi
     if [ -z "$all" ] && { [ -z "$cwd" ] || [ "$(project_root "$cwd")" != "$root" ]; }; then
       continue
     fi

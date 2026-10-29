@@ -89,13 +89,15 @@ enough for a sub-agent of this session.
 
 **Start a session** with `scripts/spawn.sh <name> <brief-file>` (`--model`, `--effort`,
 `--base <ref>`). It makes a worktree beside the repository (under
-`$ANDERTON_WORKTREES` when set), starts a full background session there in your
-permission mode, and appends to the brief that the worker reports to you by name.
+`$ANDERTON_WORKTREES` when set), starts a full session there in your permission
+mode, and appends to the brief that the worker reports to you by name. When you run
+inside herdr or tmux, the worker opens in a new tab or window the user can watch and
+type into; elsewhere, or with `--bg`, it runs in the background.
 Then:
 - SendMessage the worker with `notify_when_idle`. The notice fires on every turn end,
   not only when the task is done, so check the PR or worktree before you believe it,
   and subscribe again after each notice.
-- The user can open any worker with `claude attach <name>` or from their phone.
+- The user can open a background worker with `claude attach <name>` or from their phone.
 - When its PR is merged or the work is dropped, run `scripts/retire.sh <name>`. It
   stops the session and removes the worktree, unless the worktree holds work no
   remote has.
