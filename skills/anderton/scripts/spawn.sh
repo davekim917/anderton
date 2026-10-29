@@ -20,7 +20,7 @@ usage="usage: spawn.sh [--bg] [--model M] [--effort E] [--mode MODE] [--base REF
 model="" effort="" mode="" base="" launcher=""
 while [ $# -gt 0 ]; do
   case $1 in
-    --bg) launcher=bg; shift ;;
+    --bg) launcher="bg"; shift ;;
     --model | --effort | --mode | --base)
       [ $# -ge 2 ] || { echo "$usage" >&2; exit 2; }
       case $1 in
@@ -46,7 +46,7 @@ if [ -z "$launcher" ]; then
   elif [ -n "${TMUX:-}" ] && command -v tmux >/dev/null 2>&1; then
     launcher=tmux
   else
-    launcher=bg
+    launcher="bg"
   fi
 fi
 if [ -z "$(printf '%s' "$brief" | tr -d '[:space:]')" ]; then

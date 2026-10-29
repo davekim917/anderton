@@ -505,9 +505,9 @@ run "$scripts/retire.sh" never-started
 check "it refuses a worker spawn.sh did not start" [ "$status" -eq 1 ]
 
 # Inside herdr a worker opens in its own tab; retire.sh closes the tab.
-herdr_env="HERDR_ENV=1 HERDR_WORKSPACE_ID=w9 HERDR_SOCKET_PATH=$work/herdr.sock"
+herdr_env=(HERDR_ENV=1 HERDR_WORKSPACE_ID=w9 "HERDR_SOCKET_PATH=$work/herdr.sock")
 rm -f "$FAKE_LOG.bg"
-run env $herdr_env "$scripts/spawn.sh" tab-worker <<'BRIEF'
+run env "${herdr_env[@]}" "$scripts/spawn.sh" tab-worker <<'BRIEF'
 Tidy the README.
 BRIEF
 check "inside herdr, spawn.sh starts the worker" [ "$status" -eq 0 ]
@@ -520,7 +520,7 @@ check "and told to report to the caller by name" grep -qF 'Tell "lead-session" b
 check "not started in the background" [ ! -e "$FAKE_LOG.bg" ]
 check "recording its tab and herdr server, which retire.sh closes it in" [ "$(jq -r '"\(.launcher) \(.tab) \(.socket)"' "$CLAUDE_CONFIG_DIR/anderton/workers/tab-worker.json")" = "herdr w9:t5 $work/herdr.sock" ]
 
-run env $herdr_env "$scripts/spawn.sh" --bg bg-in-herdr <<'BRIEF'
+run env "${herdr_env[@]}" "$scripts/spawn.sh" --bg bg-in-herdr <<'BRIEF'
 Task.
 BRIEF
 check "--bg starts it in the background even inside herdr" [ "$status" -eq 0 ] && [ "$(sed -n 1p "$FAKE_LOG.bg")" = "$work/wt-bg-in-herdr" ]
@@ -528,7 +528,7 @@ echo '[]' > "$FAKE_AGENTS"
 run "$scripts/retire.sh" bg-in-herdr
 
 : > "$FAKE_LOG.closed"
-run env $herdr_env FAKE_HERDR_TAB=w9:t6 FAKE_HERDR_START_FAIL=1 "$scripts/spawn.sh" stuck-tab <<'BRIEF'
+run env "${herdr_env[@]}" FAKE_HERDR_TAB=w9:t6 FAKE_HERDR_START_FAIL=1 "$scripts/spawn.sh" stuck-tab <<'BRIEF'
 Task.
 BRIEF
 check "a tab whose claude never becomes ready fails the spawn" [ "$status" -eq 1 ]
@@ -537,7 +537,7 @@ check "and offering --bg" contains "Rerun with --bg"
 check "closing that tab" grep -qx "w9:t6" "$FAKE_LOG.closed"
 check "releasing its name" [ ! -e "$CLAUDE_CONFIG_DIR/anderton/workers/stuck-tab.json" ]
 check "and removing its worktree" [ ! -e "$work/wt-stuck-tab" ]
-run env $herdr_env FAKE_HERDR_TAB=w9:t7 FAKE_HERDR_START_FAIL=1 FAKE_HERDR_START_LIVE=1 FAKE_HERDR_CLOSE_FAIL=1 "$scripts/spawn.sh" live-stuck <<'BRIEF'
+run env "${herdr_env[@]}" FAKE_HERDR_TAB=w9:t7 FAKE_HERDR_START_FAIL=1 FAKE_HERDR_START_LIVE=1 FAKE_HERDR_CLOSE_FAIL=1 "$scripts/spawn.sh" live-stuck <<'BRIEF'
 Task.
 BRIEF
 check "a failed tab whose session is not confirmed stopped fails the spawn" [ "$status" -eq 1 ]
