@@ -129,9 +129,10 @@ You are a worker the Anderton session \"$me\" started for the task above, in $di
 
 write_record() {
   jq -nc --arg name "$name" --arg launcher "$launcher" --arg id "$id" --arg tab "$tab" --arg dir "$dir" --arg root "$root" \
-    --arg base "$base" --arg spawner "$me" --argjson worktree "$worktree" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    '{name: $name, launcher: $launcher, id: $id, tab: $tab, dir: $dir, root: $root, base: $base, worktree: $worktree,
-      spawner: $spawner, startedAt: $at}' >| "$record"
+    --arg socket "$socket" --arg base "$base" --arg spawner "$me" --argjson worktree "$worktree" \
+    --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{name: $name, launcher: $launcher, id: $id, tab: $tab, socket: $socket, dir: $dir, root: $root, base: $base,
+      worktree: $worktree, spawner: $spawner, startedAt: $at}' >| "$record"
   reserved=""
 }
 
@@ -144,8 +145,10 @@ failed() {
 set -- -n "$name" --permission-mode "$mode"
 [ -z "$model" ] || set -- "$@" --model "$model"
 [ -z "$effort" ] || set -- "$@" --effort "$effort"
-id="" tab=""
+# A tab or window id is unique only within its server, so the record keeps which server it was opened in.
+id="" tab="" socket=""
 if [ "$launcher" = herdr ]; then
+  socket="${HERDR_SOCKET_PATH:-}"
   out=$(herdr tab create --workspace "$HERDR_WORKSPACE_ID" --cwd "$dir" --label "$name" --no-focus 2>&1) ||
     failed "Could not open a herdr tab: $out"
   tab=$(printf '%s' "$out" | jq -r '.result.tab.tab_id // empty' 2>/dev/null || true)
@@ -169,6 +172,7 @@ Rerun with --bg to start it in the background instead."
   fi
   where="herdr tab '$name' ($tab)"
 elif [ "$launcher" = tmux ]; then
+  socket="${TMUX%%,*}"
   # Given as separate arguments, the window's command runs without a shell, so the brief needs no quoting.
   tab=$(tmux new-window -d -P -F '#{window_id}' -n "$name" -c "$dir" claude "$@" "$brief" 2>&1) ||
     failed "Could not open a tmux window: $tab"

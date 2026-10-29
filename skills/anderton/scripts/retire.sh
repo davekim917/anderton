@@ -24,6 +24,7 @@ worktree=$(jq -r .worktree "$record")
 id=$(jq -r '.id // empty' "$record")
 launcher=$(jq -r '.launcher // "bg"' "$record")
 tab=$(jq -r '.tab // empty' "$record")
+socket=$(jq -r '.socket // empty' "$record")
 
 # A worker that may still be running keeps its worktree: stop it, or confirm Claude Code no longer lists it.
 if ! command -v claude >/dev/null 2>&1; then
@@ -33,9 +34,18 @@ fi
 if [ "$launcher" != bg ]; then
   # A session in a herdr tab or tmux window has no id for claude stop; closing its tab or window ends it.
   if [ -n "$tab" ]; then
+    # Addressed to the server it was opened in: the same id in the caller's server can be another window.
     case $launcher in
-      herdr) if command -v herdr >/dev/null 2>&1; then herdr tab close "$tab" >/dev/null 2>&1 || true; fi ;;
-      tmux) if command -v tmux >/dev/null 2>&1; then tmux kill-window -t "$tab" >/dev/null 2>&1 || true; fi ;;
+      herdr)
+        if [ -n "$socket" ] && command -v herdr >/dev/null 2>&1; then
+          HERDR_SOCKET_PATH="$socket" herdr tab close "$tab" >/dev/null 2>&1 || true
+        fi
+        ;;
+      tmux)
+        if [ -n "$socket" ] && command -v tmux >/dev/null 2>&1; then
+          tmux -S "$socket" kill-window -t "$tab" >/dev/null 2>&1 || true
+        fi
+        ;;
     esac
   fi
   if ! session_gone "$name"; then

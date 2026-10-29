@@ -54,6 +54,7 @@ case "$1 $2" in
   "agent read") echo "Quick safety check: Is this a project you trust?" ;;
   "tab close")
     echo "$3" >> "$FAKE_LOG.closed"
+    echo "${HERDR_SOCKET_PATH:-}" >> "$FAKE_LOG.closed-socket"
     if [ -n "${FAKE_HERDR_CLOSE_ENDS:-}" ]; then echo '[]' > "$FAKE_AGENTS"; fi
     ;;
   *) exit 1 ;;
@@ -61,10 +62,12 @@ esac
 FAKE
 chmod +x "$work/bin/herdr"
 # A fake tmux: `new-window` logs its arguments and opens window @7 (with $FAKE_TMUX_LIVE the session in it
-# registers; with $FAKE_TMUX_GONE the window has already closed), `kill-window` logs its target and, with
-# $FAKE_TMUX_KILL_ENDS, ends the session.
+# registers; with $FAKE_TMUX_GONE the window has already closed), `kill-window` logs the -S server and its
+# target and, with $FAKE_TMUX_KILL_ENDS, ends the session.
 cat > "$work/bin/tmux" <<'FAKE'
 #!/usr/bin/env bash
+sock=""
+if [ "$1" = -S ]; then sock=$2; shift 2; fi
 case $1 in
   new-window)
     printf '%s\n' "$@" > "$FAKE_LOG.window"
@@ -74,7 +77,7 @@ case $1 in
     ;;
   list-windows) [ -n "${FAKE_TMUX_GONE:-}" ] || echo "@7" ;;
   kill-window)
-    echo "$3" >> "$FAKE_LOG.killed"
+    echo "$sock $3" >> "$FAKE_LOG.killed"
     if [ -n "${FAKE_TMUX_KILL_ENDS:-}" ]; then echo '[]' > "$FAKE_AGENTS"; fi
     ;;
   *) exit 1 ;;
@@ -481,7 +484,7 @@ run "$scripts/retire.sh" never-started
 check "it refuses a worker spawn.sh did not start" [ "$status" -eq 1 ]
 
 # Inside herdr a worker opens in its own tab; retire.sh closes the tab.
-herdr_env="HERDR_ENV=1 HERDR_WORKSPACE_ID=w9"
+herdr_env="HERDR_ENV=1 HERDR_WORKSPACE_ID=w9 HERDR_SOCKET_PATH=$work/herdr.sock"
 rm -f "$FAKE_LOG.bg"
 run env $herdr_env "$scripts/spawn.sh" tab-worker <<'BRIEF'
 Tidy the README.
@@ -494,7 +497,7 @@ check "running claude in that tab's pane" [ "$(tr '\n' ' ' < "$FAKE_LOG.start")"
 check "given the brief" grep -qF "Tidy the README." "$FAKE_LOG.prompt"
 check "and told to report to the caller by name" grep -qF 'Tell "lead-session" by SendMessage' "$FAKE_LOG.prompt"
 check "not started in the background" [ ! -e "$FAKE_LOG.bg" ]
-check "recording its tab, which retire.sh closes" [ "$(jq -r '"\(.launcher) \(.tab)"' "$CLAUDE_CONFIG_DIR/anderton/workers/tab-worker.json")" = "herdr w9:t5" ]
+check "recording its tab and herdr server, which retire.sh closes it in" [ "$(jq -r '"\(.launcher) \(.tab) \(.socket)"' "$CLAUDE_CONFIG_DIR/anderton/workers/tab-worker.json")" = "herdr w9:t5 $work/herdr.sock" ]
 
 run env $herdr_env "$scripts/spawn.sh" --bg bg-in-herdr <<'BRIEF'
 Task.
@@ -530,8 +533,10 @@ echo '[{"kind":"interactive","name":"tab-worker","id":null,"cwd":"/","status":"b
 run "$scripts/retire.sh" tab-worker
 check "retire.sh keeps a tab worker that is still running after its tab closed" [ "$status" -eq 1 ] && [ -d "$work/wt-tab-worker" ]
 check "and its record" [ -f "$CLAUDE_CONFIG_DIR/anderton/workers/tab-worker.json" ]
-run env FAKE_HERDR_CLOSE_ENDS=1 "$scripts/retire.sh" tab-worker
+: > "$FAKE_LOG.closed-socket"
+run env FAKE_HERDR_CLOSE_ENDS=1 HERDR_SOCKET_PATH=/elsewhere/herdr.sock "$scripts/retire.sh" tab-worker
 check "it retires a tab worker by closing its tab" [ "$status" -eq 0 ] && grep -qx "w9:t5" "$FAKE_LOG.closed"
+check "in the herdr server it was opened in, not the caller's" grep -qx "$work/herdr.sock" "$FAKE_LOG.closed-socket"
 check "removing its worktree" [ ! -e "$work/wt-tab-worker" ]
 check "and its record" [ ! -e "$CLAUDE_CONFIG_DIR/anderton/workers/tab-worker.json" ]
 check "without claude stop or rm, which need an id a tab session lacks" [ ! -s "$FAKE_LOG.life" ]
@@ -547,7 +552,7 @@ check "in a new window, detached, named for it, on its worktree, running claude 
   [ "$(head -n 14 "$FAKE_LOG.window" | tr '\n' ' ')" = "new-window -d -P -F #{window_id} -n tmux-worker -c $work/wt-tmux-worker claude -n tmux-worker --permission-mode acceptEdits " ]
 check "with the brief and its report-by-name rule as one argument" grep -qF 'Tell "lead-session" by SendMessage' "$FAKE_LOG.window"
 check "not started in the background" [ ! -e "$FAKE_LOG.bg" ]
-check "recording its window, which retire.sh kills" [ "$(jq -r '"\(.launcher) \(.tab)"' "$CLAUDE_CONFIG_DIR/anderton/workers/tmux-worker.json")" = "tmux @7" ]
+check "recording its window and tmux server, which retire.sh kills it in" [ "$(jq -r '"\(.launcher) \(.tab) \(.socket)"' "$CLAUDE_CONFIG_DIR/anderton/workers/tmux-worker.json")" = "tmux @7 /tmp/fake-tmux" ]
 run env TMUX=/tmp/fake-tmux,1,0 HERDR_ENV=1 HERDR_WORKSPACE_ID=w9 "$scripts/spawn.sh" both-muxes <<'BRIEF'
 Task.
 BRIEF
@@ -571,9 +576,9 @@ run "$scripts/retire.sh" slow-window
 
 : > "$FAKE_LOG.life"
 echo '[{"kind":"interactive","name":"tmux-worker","id":null,"cwd":"/","status":"busy"}]' > "$FAKE_AGENTS"
-run env TMUX=/tmp/fake-tmux,1,0 FAKE_TMUX_KILL_ENDS=1 "$scripts/retire.sh" tmux-worker
+run env TMUX=/tmp/other-tmux,2,0 FAKE_TMUX_KILL_ENDS=1 "$scripts/retire.sh" tmux-worker
 check "retire.sh retires a tmux worker by killing its window" [ "$status" -eq 0 ]
-check "that window" grep -qx "@7" "$FAKE_LOG.killed"
+check "that window, in the server it was opened in, not the caller's" grep -qx "/tmp/fake-tmux @7" "$FAKE_LOG.killed"
 check "removing its worktree" [ ! -e "$work/wt-tmux-worker" ]
 check "without claude stop or rm" [ ! -s "$FAKE_LOG.life" ]
 
