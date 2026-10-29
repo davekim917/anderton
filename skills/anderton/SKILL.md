@@ -50,7 +50,7 @@ deploys there. One session holds one role per project, and the claim refuses a s
    elsewhere. Lead every status report with what is waiting on the user.
 3. **Review.** Judge every change headed for production on three axes: is it the
    right thing to build (product), is it built right (`references/good-code.md`),
-   and are its numbers right (data). Green tests and a clean Codex review are
+   and are its numbers right (data). Green tests and a clean bot review are
    inputs to your judgment, not a substitute for it.
 4. **Garden.** Every correction the user gives, and every defect review finds twice,
    becomes structure (section 4). You decide the fix and write its spec; a working
@@ -84,8 +84,8 @@ worktree. Never remove a worktree you did not create.
 **Work needs doing.** Route it to the session that owns that domain, or start one
 if none does. The brief carries file paths, the data shape you chose and the check
 that defines done, never "figure it out". Write code yourself only for a fix you can
-state in one sentence. `/orchestrate` fits when the work is small and self-contained
-enough for a sub-agent of this session.
+state in one sentence. A sub-agent of this session (`/orchestrate`, if installed) fits
+when the work is small and self-contained.
 
 **Start a session** with `scripts/spawn.sh <name> <brief-file>` (`--model`, `--effort`,
 `--base <ref>`). It makes a worktree beside the repository (under
@@ -150,5 +150,5 @@ impact, never a Ship button. Report only actions a command actually ran.
 
 - `references/good-code.md`: the engineering bar. Read it in full at invocation.
 - `references/sources.md`: where the bar comes from, with dates and caveats.
-- For decisions before building: the `wwbd` skill. For cutting scope: `wwed`.
-  For tests: `test-audit`. For numbers sent to people: `analytics-verify`.
+- If installed: `wwbd` for decisions before building, `wwed` for cutting scope,
+  `test-audit` for tests, `analytics-verify` for numbers sent to people.

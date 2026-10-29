@@ -490,11 +490,14 @@ out=$(env CLAUDE_PID="$p_lead" "$scripts/waiting.sh")
 check "lists a blocked background session in the project, with its last text" contains "=== photo  $alpha  (background, blocked"
 check "shows what it said" contains "Blocked: which bucket?"
 check "leaves out a background session done more than two days ago" eval '! contains "stale-bg"'
-check "leaves out a worker spawn.sh started" eval '! contains "=== fix-login"'
+check "lists a worker spawn.sh started when it is blocked, since it cannot report" contains "=== fix-login (worker)  $work/wt-fix-login  (background, blocked"
 check "leaves out another project's background session" eval '! contains "beta-bg"'
 check "shows the question a blocked background session is asking" contains "Which bucket for prod? [east / west]"
 check "not the text before it" eval '! contains "I will check the settings."'
 check "shows the call a blocked background session waits on" contains 'Bash (pending): {"command":"terraform apply"}'
+jq -nc --arg w "$work/wt-fix-login" '[{kind: "background", name: "fix-login", sessionId: "bg-3", cwd: $w, state: "done"}]' > "$FAKE_AGENTS"
+out=$(env CLAUDE_PID="$p_lead" "$scripts/waiting.sh")
+check "leaves out a worker spawn.sh started that is not blocked" eval '! contains "fix-login"'
 echo '[]' > "$FAKE_AGENTS"
 
 echo '[{"kind":"background","name":"fix-login","id":"a1b2c3d4","sessionId":"bg-3","cwd":"/","state":"working"}]' > "$FAKE_AGENTS"
@@ -723,6 +726,9 @@ echo '[]' > "$FAKE_AGENTS"
 out=$(env CLAUDE_PID="$p_lead" "$scripts/waiting.sh" --all)
 check "waiting.sh leaves out a worker in a tab or window" eval '! contains "Worker in a tab asks something."'
 check "but not another session that only shares its name" contains "Unrelated session with the same name asks."
+registry "$p_tw" waiting permission
+out=$(env CLAUDE_PID="$p_lead" "$scripts/waiting.sh" --all)
+check "waiting.sh lists a worker in a tab that is blocked on a prompt" contains "=== watch-worker (worker)  $work/wt-watch-worker  (waiting: permission"
 rm "$CLAUDE_CONFIG_DIR/anderton/workers/watch-worker.json"
 
 # Project epsilon: the project role plus named scopes, each with its own holder.

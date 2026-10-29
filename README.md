@@ -4,7 +4,7 @@
 
 <p align="center">
 It starts real worker sessions, keeps track of every one, reviews what they build,<br>
-and is the only session allowed to ship.
+and is the one session that deploys.
 </p>
 
 <p align="center">
@@ -16,47 +16,49 @@ and is the only session allowed to ship.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/flow-dark.svg">
-  <img src="assets/flow.svg" width="100%" alt="You talk to one session, the Anderton. It watches your other sessions, starts a worker session for each task, and is the only session that ships to production. Every worker's brief ends with: report to Anderton by name, never deploy.">
+  <img src="assets/flow.svg" width="100%" alt="You talk to one session, the Anderton. It watches your other sessions, starts a worker session for each task, and is the only session that ships to production. Every worker's brief tells it to report to Anderton by name and not to deploy.">
 </picture>
 
-## The problem
+## Why
 
-Run three Claude Code sessions on one repo and you become the router. You hop between tabs to
-find the one stuck on a permission prompt. You paste context from one session into another. You
-approve a deploy in a tab you forgot was open, while two other sessions ask you the same thing.
-Each session is good at its task. Nobody owns the whole.
+Claude Code handles one task per session well. Run several on one repo and the coordination falls
+to you: which session is sitting on a permission prompt, which one already opened its PR, which one
+is about to deploy something nobody reviewed.
 
-Anderton makes one session the owner. You talk to it. It does the rest.
+Anderton hands that job to one of your sessions. It isn't a separate app or a supervisor in its
+own directory. It is a plugin for the Claude Code you already run, so the session in charge is in
+your repo, with your memory, hooks and plugins. Type `/anderton` and that session takes over.
 
 ## What it does
 
-- **Starts real sessions, not sub-agents.** Each task gets its own git worktree and a full Claude
-  Code session that loads your CLAUDE.md, project memory, skills, hooks and plugins. Inside
-  [herdr](https://herdr.dev) or tmux, each worker opens in its own tab you can watch and type into.
-  Elsewhere it runs in the background.
-- **Keeps workers talking to it, not to you.** Every brief ends the same way: message the Anderton
-  by name with any question or blocker, and with the PR when done. A question left in a tab nobody
-  reads is never answered, so the brief rules that out.
-- **Finds everything waiting on you.** Before each status report it lists every session in the
-  project that has stopped for a person: a finished reply, a permission prompt, a question with
-  options, a tool call stuck for over a minute, a background session that is blocked. That list
-  comes first.
-- **Reviews before anything ships.** Every change gets three questions: is it the right thing to
-  build, is it built right ([the engineering bar](skills/anderton/references/good-code.md)), and
-  are its numbers right. Green tests and a clean bot review are inputs, not the verdict. Work that
-  falls short goes back to the session that wrote it, with the file, the defect and the check that
-  proves the fix.
-- **Owns the line to production.** Workers stop at a PR and report. Only the Anderton deploys, and
-  a restart still needs your OK.
-- **Turns repeat mistakes into checks.** The second time something goes wrong, the instruction
-  failed. The fix climbs a ladder: make the mistake impossible, then make the compiler reject it,
-  then CI, then a test, and only last a written rule. The new check has to fail on the real past
-  mistake.
-- **Cleans up after itself.** Retiring a worker closes its tab, stops the session and removes the
-  worktree, unless the worktree holds commits or changes no remote has.
+- **Starts real sessions, not sub-agents.** Each task gets a full Claude Code session in its own git
+  worktree, started from `origin/HEAD`. It loads your user settings and the repo's committed config
+  (CLAUDE.md, skills, hooks, plugins) and shares the repo's auto memory. Inside
+  [herdr](https://herdr.dev) or tmux it opens in a tab you can watch and type into; elsewhere it
+  runs in the background.
+- **Has workers report to it.** Each brief tells the worker to message the Anderton by name with
+  questions, blockers and the finished PR, and not to deploy. A background session has no one
+  reading it, so that is the only place a question gets answered.
+- **Shows you what's waiting on you.** Before every status report it lists the sessions in the repo
+  that have stopped for a person: a finished reply, a permission prompt, a multiple-choice question,
+  a tool call stuck for over a minute, a blocked background session. Its own workers report to it
+  instead, unless one is stuck on a prompt and can't.
+- **Reviews before anything deploys.** Each change gets three questions: is it the right thing to
+  build, is it built right ([the engineering bar](skills/anderton/references/good-code.md)), and,
+  for data work, are the numbers right. Passing tests and a bot review count as evidence, not as
+  approval. Work that falls short goes back to the session that wrote it, with the file, the defect
+  and the check that proves the fix.
+- **Deploys, and only it.** Workers stop at a PR, or a merge if your repo lets them merge, and
+  report. The Anderton deploys using your repo's own steps, and asks you before any restart.
+- **Turns repeat mistakes into checks.** When the same mistake happens twice, the fix becomes a
+  check rather than another instruction: make the mistake impossible if possible, else a type, a
+  CI rule or a test, and a written rule only as a last resort. Each new check must fail on the
+  original mistake.
+- **Cleans up.** Retiring a worker stops its session, closes its tab and removes its worktree. A
+  worktree with uncommitted or unpushed work is kept; gitignored files are not.
 
-There is one Anderton per repository. A second `/anderton` in the same repo is refused and told
-which session holds the role.
+The scripts enforce one Anderton per repo and do the starting, listing and cleanup. Reviewing,
+routing and deploying are instructions the Anderton follows, not a sandbox.
 
 ## Quick start
 
@@ -74,17 +76,18 @@ In the session you want in charge, give it a name (workers report to it by name)
 /anderton
 ```
 
-Then talk to it like a lead, not a terminal:
+Then tell it what you want done:
 
-> Fix the flaky login test and add rate limiting to signup. Separate PRs.
+> Add CSV export to the reports page, and find out why the nightly import is slow. Report back
+> before changing the import.
 
-It writes a brief for each task and opens a worker for each, in its own tab. From there the
-workers ask the Anderton, not you. It answers what it can, brings you only the calls that are
-yours, reviews each PR when it lands, and ships what passes.
+It writes a brief for each task and starts a worker for each. From then on the workers ask the
+Anderton, not you. It answers what it can, brings you the decisions that are yours, reviews each
+PR, and deploys what passes.
 
 **Requirements:** Claude Code with background sessions (`claude --bg`, `claude agents`), built and
-tested on 2.1.312; `git` and `jq`; optionally herdr or tmux for workers in visible tabs. It runs on
-Linux and on macOS, including macOS's stock bash 3.2.
+tested on 2.1.312; `git`, `jq` and `gh`; optionally herdr or tmux for workers in visible tabs. It
+runs on Linux and on macOS, including macOS's stock bash 3.2.
 
 ## Questions
 
@@ -94,12 +97,33 @@ A sub-agent runs inside the Anderton's own session and hands back a summary. You
 talk to it. A worker is an ordinary Claude Code session with its own context, in its own tab, so
 you can watch it, steer it, and leave it running for hours.
 
+**What does it cost?**
+
+Each worker is a full Claude Code session and uses your plan the same way a session you open
+yourself does. Three workers cost about what three sessions cost.
+
 **Is it safe to let it run?**
 
 Workers run in the Anderton's permission mode, because a session in a different mode holds
 incoming messages until you approve them. If your Anderton runs with permissions bypassed, so do
-its workers. The rule against deploying is part of every worker's brief, not a sandbox. Retiring a
-worker never deletes work that no remote has.
+its workers. The rule against deploying is in every worker's brief, not a sandbox.
+
+**What does "deploy" mean here?**
+
+Whatever your repo says it means. The plugin has no deploy config of its own: the Anderton reads
+your CLAUDE.md and docs for the deploy and health-check steps, and goes through your merge gate if
+you have one.
+
+**What if the Anderton session ends?**
+
+The workers keep running. Start a new session, give it the same name, and run `/anderton`; it takes
+the role once the old session has exited. Then ask the workers where they stand, since a report
+sent while no session had that name may not have arrived.
+
+**How do I stop everything?**
+
+Ask the Anderton to retire its workers, or run the plugin's `retire.sh <name>` for each. Then
+`/plugin uninstall anderton@anderton`.
 
 **Does it work with Codex or other agents?**
 
@@ -108,17 +132,17 @@ only.
 
 **How is it different from firstmate?**
 
-[firstmate](https://github.com/kunchenguid/firstmate) inspired it, and it's a great project: a
-full agent distro that runs from its own directory, supports many harnesses and backends, and adds
-second mates. Anderton is the lighter take for people who live in Claude Code. It is one skill and
-four shell scripts inside the setup you already have: no separate home and no watcher process. The
-session you talk to is one of your own, in your own repo, with your memory and config.
+[firstmate](https://github.com/kunchenguid/firstmate) inspired it. firstmate is a full agent
+distro: it runs from its own directory, supports many harnesses and backends, adds second mates,
+and has a watcher process that notices a stalled crewmate by itself. Anderton is a lighter take for
+people who live in Claude Code: one skill and four shell scripts inside the setup you already have.
+Without a watcher, it relies on workers reporting in, Claude Code's idle notices, and `waiting.sh`
+catching a worker stuck on a prompt.
 
 **Can I have more than one?**
 
-One per repository owns the line to production. A named scope gives a second lead its own lock
-beside it, for example one session per team whose chat threads it watches
-(`claim.sh --scope <name>`). One session holds one role.
+One per repository deploys. A named scope gives a second lead its own lock beside it, for example a
+session leading a separate stream of work (`claim.sh --scope <name>`). One session holds one role.
 
 <details>
 <summary><b>How it works</b></summary>
@@ -134,13 +158,11 @@ is the session's directory.
 **`claim.sh`** records the claiming session as the project's holder in
 `~/.claude/anderton/<key>.json`. The key is `git hash-object` of the project root, which the
 record also holds. It exits 3 while another live session holds that project; `--take-over`
-replaces it. A holder in the machine-wide `~/.claude/anderton.json` that earlier versions wrote
-still holds its project until that project's next claim, which retires the file to
-`anderton.json.migrated`. `--scope <name>` claims a named scope within the project instead, with
-its own holder and a key hashed from the root and the name. One session holds one role per
-project: a session holding the project or another scope is refused (exit 3), `--take-over`
-included. The role belongs to a Claude Code process (its pid plus its registry start time), not a
-session id, so it survives `/clear`.
+replaces it. `--scope <name>` claims a named scope within the project instead, with its own holder
+and a key hashed from the root and the name. One session holds one role per project: a session
+holding the project or another scope is refused (exit 3), `--take-over` included. The role belongs
+to a Claude Code process (its pid plus its registry start time), not a session id, so it survives
+`/clear`.
 
 **`waiting.sh`** lists the live sessions in the caller's project (`--all`: every project) that wait
 on a person, leaving out every holder in the caller's project, the project's and each scope's:
@@ -154,8 +176,9 @@ on a person, leaving out every holder in the caller's project, the project's and
 It reads `~/.claude/sessions/*.json`, keeps sessions whose process is alive and started when the
 registry says, and finds each transcript under `~/.claude/projects/*/<session id>.jsonl`.
 Background sessions have no registry entry, so it also reads `claude agents --json`. It lists one
-that is `blocked`, and one that is `done` with a turn in the last two days. It leaves out the
-workers `spawn.sh` started, which report to the Anderton instead.
+that is `blocked`, and one that is `done` with a turn in the last two days. A worker `spawn.sh`
+started is listed, marked `(worker)`, only while it is blocked on a prompt; otherwise it reports to
+the Anderton.
 
 **`spawn.sh [--bg] [--model M] [--effort E] [--mode MODE] [--base REF] <name> [brief-file]`**
 starts a worker: a full Claude Code session named `<name>`, in a new git worktree at
@@ -178,12 +201,12 @@ starts a worker: a full Claude Code session named `<name>`, in a new git worktre
 - The worker is recorded in `~/.claude/anderton/workers/<name>.json`, with the herdr or tmux server
   it was opened in.
 
-**`retire.sh <name>`** stops that worker and removes its worktree and record. A herdr tab or tmux
+**`retire.sh <name>`** stops that worker, then removes its worktree and record. A herdr tab or tmux
 window is closed only when it still carries the worker's name in the server recorded at spawn, and
 the worker counts as stopped only when that tab or window is gone and its name has left
 `claude agents`; a background worker is stopped with `claude stop`. It exits 3 and keeps the
 worktree when the worktree has uncommitted changes, or commits since it started that no remote
-branch has.
+branch has. Gitignored files don't count as changes.
 
 All four honour `CLAUDE_CONFIG_DIR` and need `jq`, `git` and a POSIX `ps`.
 
