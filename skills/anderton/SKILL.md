@@ -24,6 +24,13 @@ when another live session holds the role for the same project.
 On refusal, stop and tell the user which session holds the role. Do not take it over
 unless the user says so. A prose rule is not a lock.
 
+A project can also have named scopes, each with its own holder: for example, one
+session per team whose chat threads it watches, beside the session holding the
+project. When the user or a project skill invokes you for a scope, claim with
+`scripts/claim.sh --scope <name>`. A scope's holder owns that scope's work and the
+user's calls on it; the line to production stays with the project's holder, so send
+deploys there. One session holds one role per project, and the claim refuses a second.
+
 ## 2. The four jobs
 
 1. **Own the line to production.** Only you deploy. Working sessions stop at a

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # List the live Claude Code sessions in the caller's project (every project with --all) that are
 # waiting on a person: their turn ended with Claude talking, or it is blocked on a prompt. The
-# session holding the Anderton role for the caller's project is left out, and so are the workers
-# spawn.sh started, which report to it.
+# sessions holding an Anderton role in the caller's project, its own or a scope's, are left out, and
+# so are the workers spawn.sh started, which report to them.
 # Portable to macOS's bash 3.2 and BSD userland: jq does the date arithmetic, not date -d.
 set -euo pipefail
 # shellcheck source=SCRIPTDIR/session-lib.sh
@@ -18,7 +18,7 @@ case "${1:-}" in
 esac
 
 root=$(invoking_root)
-record=$(holder_record "$root")
+records=$(project_holders "$root")
 
 for s in "$sessions"/*.json; do
   [ -e "$s" ] || continue
@@ -27,7 +27,13 @@ for s in "$sessions"/*.json; do
 $fields
 EOF
   if [ -z "$pid" ] || [ -z "$sid" ]; then continue; fi
-  if [ -n "$record" ] && is_holder "$s" "$record"; then continue; fi
+  held=""
+  while IFS= read -r r; do
+    if [ -n "$r" ] && is_holder "$s" "$r"; then held=1; fi
+  done <<EOF
+$records
+EOF
+  if [ -n "$held" ]; then continue; fi
   if [ -z "$all" ] && { [ -z "$cwd" ] || [ "$(project_root "$cwd")" != "$root" ]; }; then
     continue
   fi

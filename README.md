@@ -32,8 +32,11 @@ directory.
   also holds. It exits 3 while another live session holds that project; `--take-over` replaces it.
   A holder in the machine-wide `~/.claude/anderton.json` that earlier versions wrote still holds its
   project until that project's next claim, which retires the file to `anderton.json.migrated`.
+  `--scope <name>` claims a named scope within the project instead, with its own holder and a key
+  hashed from the root and the name. One session holds one role per project: a session holding the
+  project or another scope is refused (exit 3), `--take-over` included.
 - `scripts/waiting.sh` lists the live sessions in the caller's project (`--all`: every project) that
-  wait on a person:
+  wait on a person, leaving out every holder in the caller's project, the project's and each scope's:
   - the turn ended with Claude's text;
   - the registry's `status` says the session is blocked on a permission prompt or an
     `AskUserQuestion`, in the main thread or a sub-agent;

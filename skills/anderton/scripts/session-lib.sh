@@ -93,9 +93,11 @@ project_key() {
   printf '%s' "$1" | git hash-object --stdin
 }
 
-# The holder file for project $1.
+# The holder file for project $1, or for named scope $2 within it.
 holder_path() {
-  printf '%s/%s.json\n' "$holders" "$(project_key "$1")"
+  local key=$1
+  if [ -n "${2:-}" ]; then key=$(printf '%s\nscope=%s' "$1" "$2"); fi
+  printf '%s/%s.json\n' "$holders" "$(project_key "$key")"
 }
 
 # True when registry entry $1 is the live process that holder record $2 names. A pid alone would
@@ -113,18 +115,29 @@ is_holder() {
     registered_alive "$(jq -r .pid "$1")" "$(jq -r '.startedAt // empty | floor' "$1")"
 }
 
-# The record of project $1's holder: its own file, else the machine-wide file earlier versions
-# wrote, while that holder's session belongs to this project. Prints the path, or nothing.
+# The record of project $1's holder, or of scope $2's: its own file, else, for the project's role,
+# the machine-wide file earlier versions wrote, while that holder's session belongs to this project.
+# Prints the path, or nothing.
 holder_record() {
   local f lpid lcwd
-  f=$(holder_path "$1")
+  f=$(holder_path "$1" "${2:-}")
   if [ -f "$f" ]; then
     printf '%s\n' "$f"
     return
   fi
-  [ -f "$legacy_holder" ] || return 0
+  if [ -n "${2:-}" ] || [ ! -f "$legacy_holder" ]; then return 0; fi
   lpid=$(jq -r '.pid // empty' "$legacy_holder" 2>/dev/null || true)
   [ -n "$lpid" ] || return 0
   lcwd=$(jq -r '.cwd // empty' "$sessions/$lpid.json" 2>/dev/null || true)
   if [ -n "$lcwd" ] && [ "$(project_root "$lcwd")" = "$1" ]; then printf '%s\n' "$legacy_holder"; fi
+}
+
+# Every holder record in project $1: the project's role and each named scope's.
+project_holders() {
+  local f
+  holder_record "$1"
+  for f in "$holders"/*.json; do
+    [ -f "$f" ] || continue
+    if [ "$(jq -r 'select(.scope != null) | .root' "$f" 2>/dev/null || true)" = "$1" ]; then printf '%s\n' "$f"; fi
+  done
 }

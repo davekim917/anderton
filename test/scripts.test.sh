@@ -218,13 +218,19 @@ check "a session in a linked worktree of the same repository is refused" [ "$sta
 mkdir "$state.lock"
 echo "$p_dead" > "$state.lock/pid"
 claim_status cccc-3 "$p_holder"
-check "a lock left by a dead claim stops the claim" [ "$status" -eq 1 ]
-check "that lock is not deleted" [ -d "$state.lock" ]
-check "the report names the lock to remove" contains "was left by claim process $p_dead"
-rm -f "$state.lock/pid"
-rmdir "$state.lock"
-check "the holder claims once the lock is removed" env CLAUDE_CODE_SESSION_ID=cccc-3 "$scripts/claim.sh"
-check "the lock is released" [ ! -e "$state.lock" ]
+if command -v flock >/dev/null 2>&1; then
+  # The kernel drops a dead claim's flock, so nothing it leaves behind can stop a later claim.
+  check "with flock, a lock directory left by a dead claim does not stop the claim" [ "$status" -eq 0 ]
+  rm -rf "$state.lock"
+else
+  check "a lock left by a dead claim stops the claim" [ "$status" -eq 1 ]
+  check "that lock is not deleted" [ -d "$state.lock" ]
+  check "the report names the lock to remove" contains "was left by claim process $p_dead"
+  rm -f "$state.lock/pid"
+  rmdir "$state.lock"
+  check "the holder claims once the lock is removed" env CLAUDE_CODE_SESSION_ID=cccc-3 "$scripts/claim.sh"
+  check "the lock is released" [ ! -e "$state.lock" ]
+fi
 
 # /clear: the holder's process keeps its pid and gets a new session id and transcript.
 session "$p_holder" cccc-9 "$alpha" holder-session
@@ -427,6 +433,71 @@ check "and its record" [ ! -e "$CLAUDE_CONFIG_DIR/anderton/workers/fix-login.jso
 check "and the session, by id" grep -qx "rm a1b2c3d4" "$FAKE_LOG.life"
 run "$scripts/retire.sh" never-started
 check "it refuses a worker spawn.sh did not start" [ "$status" -eq 1 ]
+
+# Project epsilon: the project role plus named scopes, each with its own holder.
+mkdir "$work/epsilon"
+epsilon="$work/epsilon"
+spawn; p_eh=$pid; session "$p_eh" eeh-1 "$epsilon" epsilon-host
+spawn; p_ea=$pid; session "$p_ea" eea-1 "$epsilon" epsilon-fleet-a
+spawn; p_eb=$pid; session "$p_eb" eeb-1 "$epsilon" epsilon-fleet-b
+spawn; p_eo=$pid; session "$p_eo" eeo-1 "$epsilon" epsilon-other
+transcript eeh-1 "$recent" assistant "Host Anderton question."
+transcript eea-1 "$recent" assistant "Fleet A Anderton question."
+transcript eeb-1 "$recent" assistant "Fleet B Anderton question."
+transcript eeo-1 "$recent" assistant "Ordinary epsilon question."
+
+claim_status eeh-1 "$p_eh"
+check "the project role is claimed with no scope" [ "$status" -eq 0 ]
+claim_status eea-1 "$p_ea" --scope fleet-a
+check "a scope is claimed while another session holds the project role" [ "$status" -eq 0 ]
+check "the scope's record names its scope" [ "$(jq -r .scope "$(holder_path "$epsilon" fleet-a)")" = fleet-a ]
+check "the project role's record is untouched" [ "$(jq -r .sessionId "$(holder_path "$epsilon")")" = eeh-1 ]
+claim_status eeb-1 "$p_eb" --scope fleet-a
+check "a second session is refused a held scope" [ "$status" -eq 3 ]
+check "the refusal names the scope and its holder" \
+  contains "Anderton for $epsilon, scope fleet-a is held by live session 'epsilon-fleet-a'"
+claim_status eeb-1 "$p_eb" --scope fleet-b
+check "another scope in the same project is claimed" [ "$status" -eq 0 ]
+claim_status eea-1 "$p_ea" --scope fleet-a
+check "a scope's holder re-claims its scope" [ "$status" -eq 0 ]
+claim_status eeh-1 "$p_eh" --scope fleet-c
+check "the project role's holder is refused a scope" [ "$status" -eq 3 ]
+check "that refusal names the role it holds" contains "already holds the project role"
+check "and records nothing for the scope" [ ! -e "$(holder_path "$epsilon" fleet-c)" ]
+claim_status eea-1 "$p_ea" --take-over
+check "a scope's holder is refused the project role, --take-over included" [ "$status" -eq 3 ]
+check "that refusal names its scope" contains "already holds scope fleet-a"
+claim_status eeo-1 "$p_eo" --scope
+check "--scope without a name is a usage error" [ "$status" -eq 2 ]
+
+out=$(env CLAUDE_PID="$p_eh" "$scripts/waiting.sh")
+check "from the project role, lists an ordinary session" contains "Ordinary epsilon question."
+check "leaves out every scope's holder" eval '! contains "Fleet A Anderton question." && ! contains "Fleet B Anderton question."'
+check "leaves out the project role's holder" eval '! contains "Host Anderton question."'
+out=$(env CLAUDE_PID="$p_eo" "$scripts/waiting.sh")
+check "from an ordinary session, still leaves out every holder" eval '! contains "Anderton question."'
+
+# Two claims by one session for different scopes at once: the one-role check must see the other's record.
+mkdir "$work/zeta"
+zeta="$work/zeta"
+spawn; p_z=$pid; session "$p_z" zzzz-1 "$zeta" zeta-session
+both=0
+for i in 1 2 3 4 5; do
+  rm -f "$(holder_path "$zeta" "x$i")" "$(holder_path "$zeta" "y$i")"
+  env CLAUDE_CODE_SESSION_ID=zzzz-1 CLAUDE_PID="$p_z" "$scripts/claim.sh" --scope "x$i" > "$work/zx" 2>&1 &
+  a=$!
+  env CLAUDE_CODE_SESSION_ID=zzzz-1 CLAUDE_PID="$p_z" "$scripts/claim.sh" --scope "y$i" > "$work/zy" 2>&1 &
+  b=$!
+  wait "$a" || true
+  wait "$b" || true
+  if [ -e "$(holder_path "$zeta" "x$i")" ] && [ -e "$(holder_path "$zeta" "y$i")" ]; then
+    both=$((both + 1))
+    echo "both claimed in round $i:"
+    cat "$work/zx" "$work/zy"
+  fi
+  rm -f "$(holder_path "$zeta" "x$i")" "$(holder_path "$zeta" "y$i")"
+done
+check "concurrent claims of two scopes by one session never both succeed" [ "$both" -eq 0 ]
 
 [ "$failures" -eq 0 ] || { echo "$failures check(s) failed"; exit 1; }
 echo "all checks passed"
