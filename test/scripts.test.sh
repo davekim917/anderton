@@ -283,6 +283,7 @@ contains() { grep -qF -- "$1" <<EOF
 $out
 EOF
 }
+no_match() { ! grep -q -- "$1" "$2"; } # no_match <pattern> <file>
 
 # A holder left by an earlier version in the machine-wide file still holds its project.
 printf '{"pid":%s,"sessionId":"cccc-3","claimedAt":"%s"}\n' "$p_holder" "$recent" > "$CLAUDE_CONFIG_DIR/anderton.json"
@@ -648,7 +649,7 @@ awk '$3 != "@10"' "$FAKE_LOG.windows-open" > "$FAKE_LOG.w.tmp" && mv "$FAKE_LOG.
 echo "/tmp/fake-tmux 99 @10 someone-else" >> "$FAKE_LOG.windows-open"
 echo '[]' > "$FAKE_AGENTS"
 run "$scripts/retire.sh" reuse-window
-check "a tmux window id now held by another server's window is not killed" eval '! grep -q "@10" "$FAKE_LOG.killed"'
+check "a tmux window id now held by another server's window is not killed" no_match "@10" "$FAKE_LOG.killed"
 check "and the worker counts as gone, so it is retired" [ "$status" -eq 0 ]
 check "leaving that other window open" grep -q "99 @10 someone-else" "$FAKE_LOG.windows-open"
 : > "$FAKE_LOG.closed"
@@ -658,7 +659,7 @@ BRIEF
 awk '$2 != "w9:t9"' "$FAKE_LOG.tabs-open" > "$FAKE_LOG.t.tmp" && mv "$FAKE_LOG.t.tmp" "$FAKE_LOG.tabs-open"
 echo "$work/herdr.sock w9:t9 someone-else" >> "$FAKE_LOG.tabs-open"
 run "$scripts/retire.sh" reuse-tab
-check "a herdr tab id now labelled for something else is not closed" eval '! grep -qx "w9:t9" "$FAKE_LOG.closed"'
+check "a herdr tab id now labelled for something else is not closed" no_match "w9:t9" "$FAKE_LOG.closed"
 check "and the worker is retired" [ "$status" -eq 0 ]
 
 # An answer the check cannot read keeps the worker; a missing tmux socket means its server is gone.
