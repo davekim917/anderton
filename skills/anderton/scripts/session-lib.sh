@@ -193,3 +193,14 @@ worker_gone() {
   done
   place_gone "$1" "$2" "$3" && session_gone "$4"
 }
+
+# True when the session named $1, running in directory $2, is a worker spawn.sh started: the worker record of
+# that name exists and the session runs in its worktree. A worker reports to its spawner, not the user.
+is_worker() {
+  local f="$holders/workers/$1.json" dir
+  if [ -z "$1" ] || [ ! -f "$f" ]; then return 1; fi
+  dir=$(jq -r '.dir // empty' "$f" 2>/dev/null || true)
+  [ -n "$dir" ] || return 1
+  case $2 in "$dir" | "$dir"/*) return 0 ;; esac
+  return 1
+}

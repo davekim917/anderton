@@ -619,6 +619,19 @@ check "without claude stop or rm" [ ! -s "$FAKE_LOG.life" ]
 # drift past registered_alive's window.
 now_ms="$(date +%s)000"
 
+# A worker in a tab or window is an interactive session, so waiting.sh's registry pass must leave it out too.
+spawn; p_tw=$pid; session "$p_tw" twrk-1 "$work/wt-watch-worker" watch-worker
+spawn; p_tw2=$pid; session "$p_tw2" twrk-2 "$alpha" watch-worker
+transcript twrk-1 "$recent" assistant "Worker in a tab asks something."
+transcript twrk-2 "$recent" assistant "Unrelated session with the same name asks."
+jq -nc --arg d "$work/wt-watch-worker" '{name: "watch-worker", launcher: "herdr", dir: $d}' \
+  > "$CLAUDE_CONFIG_DIR/anderton/workers/watch-worker.json"
+echo '[]' > "$FAKE_AGENTS"
+out=$(env CLAUDE_PID="$p_lead" "$scripts/waiting.sh" --all)
+check "waiting.sh leaves out a worker in a tab or window" eval '! contains "Worker in a tab asks something."'
+check "but not another session that only shares its name" contains "Unrelated session with the same name asks."
+rm "$CLAUDE_CONFIG_DIR/anderton/workers/watch-worker.json"
+
 # Project epsilon: the project role plus named scopes, each with its own holder.
 mkdir "$work/epsilon"
 epsilon="$work/epsilon"
