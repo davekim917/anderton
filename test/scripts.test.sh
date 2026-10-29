@@ -15,6 +15,20 @@ trap cleanup EXIT
 
 export CLAUDE_CONFIG_DIR="$work/claude"
 unset CLAUDE_PID CLAUDE_CODE_SESSION_ID
+# A fake claude CLI, so no test reaches this machine's real sessions: `agents --json` prints $FAKE_AGENTS,
+# `--bg` logs its directory and arguments, `stop` and `rm` log themselves.
+mkdir -p "$work/bin"
+cat > "$work/bin/claude" <<'FAKE'
+#!/usr/bin/env bash
+case $1 in
+  agents) cat "$FAKE_AGENTS" ;;
+  --bg) { pwd; printf '%s\n' "$@"; } > "$FAKE_LOG.bg"; echo "backgrounded · a1b2c3d4 · $3" ;;
+  stop | rm) echo "$*" >> "$FAKE_LOG.life" ;;
+esac
+FAKE
+chmod +x "$work/bin/claude"
+export PATH="$work/bin:$PATH" FAKE_AGENTS="$work/agents.json" FAKE_LOG="$work/claude-log"
+echo '[]' > "$FAKE_AGENTS"
 mkdir -p "$CLAUDE_CONFIG_DIR/sessions" "$CLAUDE_CONFIG_DIR/projects/p" "$work/beta"
 
 # Project alpha is a repository with a linked worktree; project beta is a plain directory.
@@ -294,6 +308,81 @@ status=$?
 set -e
 check "refuses to run without git" [ "$status" -eq 1 ]
 check "says git is missing" contains "needs: git."
+
+# spawn.sh and retire.sh: a worker in its own worktree beside the repository.
+spawn; p_lead=$pid; session "$p_lead" lead-1 "$alpha" lead-session
+printf '{"type":"user","permissionMode":"acceptEdits","timestamp":"%s","message":{"role":"user","content":"go"}}\n' \
+  "$recent" > "$CLAUDE_CONFIG_DIR/projects/p/lead-1.jsonl"
+run() { # run <script> [args...]: as the lead session; sets $out and $status
+  set +e
+  out=$(env CLAUDE_CODE_SESSION_ID=lead-1 CLAUDE_PID="$p_lead" "$@" 2>&1)
+  status=$?
+  set -e
+}
+run "$scripts/spawn.sh" fix-login <<'BRIEF'
+Fix the login redirect. Done when the redirect test passes.
+BRIEF
+check "spawn.sh starts the worker" [ "$status" -eq 0 ]
+check "in a new worktree beside the repository" [ "$(sed -n 1p "$FAKE_LOG.bg")" = "$work/wt-fix-login" ]
+check "that worktree belongs to the repository" [ "$(project_root "$work/wt-fix-login")" = "$alpha" ]
+check "named, in the caller's permission mode" grep -qx -- "acceptEdits" "$FAKE_LOG.bg"
+check "with the brief" grep -qF "Fix the login redirect." "$FAKE_LOG.bg"
+check "telling it to report to the caller by name" grep -qF 'Tell "lead-session" by SendMessage' "$FAKE_LOG.bg"
+check "recording its id, which claude stop and rm take" [ "$(jq -r .id "$CLAUDE_CONFIG_DIR/anderton/workers/fix-login.json")" = a1b2c3d4 ]
+run "$scripts/spawn.sh" fix-login <<'BRIEF'
+Again.
+BRIEF
+check "a second worker of the same name is refused" [ "$status" -eq 1 ]
+echo '[{"kind":"background","name":"busy-name","sessionId":"x","cwd":"/","state":"working"}]' > "$FAKE_AGENTS"
+run "$scripts/spawn.sh" busy-name <<'BRIEF'
+Task.
+BRIEF
+check "a name a live session already has is refused" contains "already named 'busy-name'"
+echo '[]' > "$FAKE_AGENTS"
+spawn; p_anon=$pid; session "$p_anon" anon-1 "$alpha" ""
+set +e
+out=$(echo "Task." | env CLAUDE_CODE_SESSION_ID=anon-1 CLAUDE_PID="$p_anon" "$scripts/spawn.sh" anon-worker 2>&1)
+status=$?
+set -e
+check "an unnamed caller is refused: the worker would have no one to report to" contains "has no name"
+
+# waiting.sh: background sessions come from `claude agents --json`, which the registry does not list.
+printf '{"type":"assistant","timestamp":"%s","message":{"content":[{"type":"text","text":"Blocked: which bucket?"}]}}\n' \
+  "$recent" > "$CLAUDE_CONFIG_DIR/projects/p/bg-1.jsonl"
+printf '{"type":"assistant","timestamp":"2020-01-01T00:00:00Z","message":{"content":[{"type":"text","text":"Old result."}]}}\n' \
+  > "$CLAUDE_CONFIG_DIR/projects/p/bg-2.jsonl"
+printf '{"type":"assistant","timestamp":"%s","message":{"content":[{"type":"text","text":"Worker question."}]}}\n' \
+  "$recent" > "$CLAUDE_CONFIG_DIR/projects/p/bg-3.jsonl"
+jq -nc --arg a "$alpha" --arg w "$work/wt-fix-login" --arg b "$beta" '[
+  {kind: "background", name: "photo", sessionId: "bg-1", cwd: $a, state: "blocked"},
+  {kind: "background", name: "stale-bg", sessionId: "bg-2", cwd: $a, state: "done"},
+  {kind: "background", name: "fix-login", sessionId: "bg-3", cwd: $w, state: "blocked"},
+  {kind: "background", name: "beta-bg", sessionId: "bg-1", cwd: $b, state: "blocked"}]' > "$FAKE_AGENTS"
+out=$(env CLAUDE_PID="$p_lead" "$scripts/waiting.sh")
+check "lists a blocked background session in the project, with its last text" contains "=== photo  $alpha  (background, blocked"
+check "shows what it said" contains "Blocked: which bucket?"
+check "leaves out a background session done more than two days ago" eval '! contains "stale-bg"'
+check "leaves out a worker spawn.sh started" eval '! contains "=== fix-login"'
+check "leaves out another project's background session" eval '! contains "beta-bg"'
+echo '[]' > "$FAKE_AGENTS"
+
+echo "work" > "$work/wt-fix-login/notes.txt"
+run "$scripts/retire.sh" fix-login
+check "retire.sh keeps a worktree with uncommitted work" [ "$status" -eq 3 ] && [ -d "$work/wt-fix-login" ]
+check "and says why" contains "uncommitted changes"
+check "it stops the worker by id" grep -qx "stop a1b2c3d4" "$FAKE_LOG.life"
+rm "$work/wt-fix-login/notes.txt"
+git -C "$work/wt-fix-login" -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m wip
+run "$scripts/retire.sh" fix-login
+check "it keeps a worktree with commits no remote has" [ "$status" -eq 3 ]
+git -C "$work/wt-fix-login" reset -q --hard HEAD~1
+run "$scripts/retire.sh" fix-login
+check "it retires a clean worker" [ "$status" -eq 0 ]
+check "removing its worktree" [ ! -e "$work/wt-fix-login" ]
+check "and its record" [ ! -e "$CLAUDE_CONFIG_DIR/anderton/workers/fix-login.json" ]
+check "and the session, by id" grep -qx "rm a1b2c3d4" "$FAKE_LOG.life"
+run "$scripts/retire.sh" never-started
+check "it refuses a worker spawn.sh did not start" [ "$status" -eq 1 ]
 
 [ "$failures" -eq 0 ] || { echo "$failures check(s) failed"; exit 1; }
 echo "all checks passed"
