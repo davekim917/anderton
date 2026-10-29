@@ -471,6 +471,31 @@ check "leaves out the project role's holder" eval '! contains "Host Anderton que
 out=$(env CLAUDE_PID="$p_eo" "$scripts/waiting.sh")
 check "from an ordinary session, still leaves out every holder" eval '! contains "Anderton question."'
 
+# DIAGNOSTIC (temporary): is mkdir exclusive on this runner's filesystem?
+echo "fs of $work: $(stat -f -c %T "$work" 2>/dev/null || stat -f "$work" 2>/dev/null | head -1)"
+dbl=0
+for n in $(seq 1 200); do
+  d="$work/mk.$n"
+  ( mkdir "$d" 2>/dev/null && echo a > "$work/mk.$n.a" ) &
+  m1=$!
+  ( mkdir "$d" 2>/dev/null && echo b > "$work/mk.$n.b" ) &
+  m2=$!
+  wait "$m1" "$m2" || true
+  if [ -e "$work/mk.$n.a" ] && [ -e "$work/mk.$n.b" ]; then dbl=$((dbl + 1)); fi
+done
+echo "mkdir double successes: $dbl of 200"
+dbl=0
+for n in $(seq 1 200); do
+  d="$work/mb.$n"
+  ( /bin/mkdir "$d" 2>/dev/null && echo a > "$work/mb.$n.a" ) &
+  m1=$!
+  ( /bin/mkdir "$d" 2>/dev/null && echo b > "$work/mb.$n.b" ) &
+  m2=$!
+  wait "$m1" "$m2" || true
+  if [ -e "$work/mb.$n.a" ] && [ -e "$work/mb.$n.b" ]; then dbl=$((dbl + 1)); fi
+done
+echo "/bin/mkdir double successes: $dbl of 200; mkdir is $(type -a mkdir | tr '\n' ' ')"
+
 # Two claims by one session for different scopes at once: the one-role check must see the other's record.
 mkdir "$work/zeta"
 zeta="$work/zeta"
