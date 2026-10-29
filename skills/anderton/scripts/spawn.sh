@@ -41,7 +41,8 @@ case $name in
 esac
 if [ -n "${2:-}" ]; then brief=$(cat "$2"); else brief=$(cat); fi
 if [ -z "$launcher" ]; then
-  if [ "${HERDR_ENV:-}" = 1 ] && [ -n "${HERDR_WORKSPACE_ID:-}" ] && command -v herdr >/dev/null 2>&1; then
+  if [ "${HERDR_ENV:-}" = 1 ] && [ -n "${HERDR_WORKSPACE_ID:-}" ] && [ -n "${HERDR_SOCKET_PATH:-}" ] &&
+    command -v herdr >/dev/null 2>&1; then
     launcher=herdr
   elif [ -n "${TMUX:-}" ] && command -v tmux >/dev/null 2>&1; then
     launcher=tmux
@@ -129,16 +130,17 @@ You are a worker the Anderton session \"$me\" started for the task above, in $di
 
 write_record() {
   jq -nc --arg name "$name" --arg launcher "$launcher" --arg id "$id" --arg tab "$tab" --arg dir "$dir" --arg root "$root" \
-    --arg socket "$socket" --arg base "$base" --arg spawner "$me" --argjson worktree "$worktree" \
+    --arg socket "$socket" --arg server "$server" --arg base "$base" --arg spawner "$me" --argjson worktree "$worktree" \
     --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    '{name: $name, launcher: $launcher, id: $id, tab: $tab, socket: $socket, dir: $dir, root: $root, base: $base,
-      worktree: $worktree, spawner: $spawner, startedAt: $at}' >| "$record"
+    '{name: $name, launcher: $launcher, id: $id, tab: $tab, socket: $socket, server: $server, dir: $dir, root: $root,
+      base: $base, worktree: $worktree, spawner: $spawner, startedAt: $at}' >| "$record"
   reserved=""
 }
 
 failed() {
   [ -z "${1:-}" ] || echo "$1" >&2
   if [ "$worktree" = true ]; then git -C "$root" worktree remove --force "$dir"; fi
+  rm -f "$record"
   exit 1
 }
 
@@ -146,7 +148,7 @@ set -- -n "$name" --permission-mode "$mode"
 [ -z "$model" ] || set -- "$@" --model "$model"
 [ -z "$effort" ] || set -- "$@" --effort "$effort"
 # A tab or window id is unique only within its server, so the record keeps which server it was opened in.
-id="" tab="" socket=""
+id="" tab="" socket="" server=""
 if [ "$launcher" = herdr ]; then
   socket="${HERDR_SOCKET_PATH:-}"
   out=$(herdr tab create --workspace "$HERDR_WORKSPACE_ID" --cwd "$dir" --label "$name" --no-focus 2>&1) ||
@@ -154,13 +156,14 @@ if [ "$launcher" = herdr ]; then
   tab=$(printf '%s' "$out" | jq -r '.result.tab.tab_id // empty' 2>/dev/null || true)
   pane=$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id // empty' 2>/dev/null || true)
   if [ -z "$tab" ] || [ -z "$pane" ]; then failed "herdr opened no tab: $out"; fi
+  # Recorded as soon as the tab exists, so a spawn cut short still leaves retire.sh something to stop.
+  write_record
   # A startup prompt (folder trust, a new permission mode) leaves the agent blocked: show it, then undo.
   if ! out=$(herdr agent start "$name" --kind claude --pane "$pane" --timeout 120000 -- "$@" 2>&1) ||
     ! out=$(herdr agent prompt "$name" "$brief" 2>&1); then
     screen=$(herdr agent read "$name" 2>/dev/null | tail -n 20 || true)
     herdr tab close "$tab" >/dev/null 2>&1 || true
     if ! worker_gone herdr "$socket" "$tab" "$name"; then
-      write_record
       echo "Claude Code in herdr tab '$name' did not take the brief: $out
 $screen
 It is not confirmed stopped, so $dir and its record are kept: close tab $tab, then run retire.sh $name." >&2
@@ -173,9 +176,13 @@ Rerun with --bg to start it in the background instead."
   where="herdr tab '$name' ($tab)"
 elif [ "$launcher" = tmux ]; then
   socket="${TMUX%%,*}"
+  server=$(printf '%s' "$TMUX" | cut -d, -f2)
   # Given as separate arguments, the window's command runs without a shell, so the brief needs no quoting.
-  tab=$(tmux new-window -d -P -F '#{window_id}' -n "$name" -c "$dir" claude "$@" "$brief" 2>&1) ||
-    failed "Could not open a tmux window: $tab"
+  out=$(tmux new-window -d -P -F '#{window_id}' -n "$name" -c "$dir" claude "$@" "$brief" 2>&1) ||
+    failed "Could not open a tmux window: $out"
+  tab=$(printf '%s\n' "$out" | grep -E '^@[0-9]+$' | tail -n 1 || true)
+  [ -n "$tab" ] || failed "tmux opened no window: $out"
+  write_record
   # The window closes when claude exits, so a worker that never registers and has no window failed to start.
   listed="" tries=$(( ${ANDERTON_START_WAIT:-30} * 2 ))
   while [ "$tries" -gt 0 ]; do
@@ -183,7 +190,9 @@ elif [ "$launcher" = tmux ]; then
       listed=1
       break
     fi
-    tmux list-windows -a -F '#{window_id}' 2>/dev/null | grep -qx -- "$tab" || failed "Claude Code exited at once in tmux window '$name'."
+    if [ "$(place_state tmux "$socket" "$tab" "$name" "$server")" = absent ]; then
+      failed "Claude Code exited at once in tmux window '$name'."
+    fi
     tries=$((tries - 1))
     sleep 0.5
   done

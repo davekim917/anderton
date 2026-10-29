@@ -155,43 +155,61 @@ session_gone() {
   return 1
 }
 
-# True when herdr tab or tmux window $3 ($1: herdr|tmux) is confirmed gone from the server at socket $2:
-# not found there, or that whole server gone. Anything the check cannot read counts as still there.
-place_gone() {
+# Whether worker $4's tab or window stands in its server: prints present, absent, or unknown when the server's
+# answer cannot be read. $1 herdr|tmux, $2 the server's socket, $3 the tab or window id, $5 the tmux server's pid.
+# A restarted server reuses ids, so the tab or window must also carry the worker's name (the herdr label, the
+# tmux window name) and, for tmux, belong to the same server process; an id holding anything else is absent.
+place_state() {
   local out
-  if [ -z "$2" ] || [ -z "$3" ]; then return 1; fi
+  if [ -z "$2" ] || [ -z "$3" ]; then
+    echo unknown
+    return
+  fi
   case $1 in
     herdr)
-      command -v herdr >/dev/null 2>&1 || return 1
-      if out=$(HERDR_SOCKET_PATH="$2" herdr tab get "$3" 2>&1); then return 1; fi
-      printf '%s' "$out" | jq -e '.error.code == "tab_not_found" or .error.code == "server_not_running"' >/dev/null 2>&1
+      if ! command -v herdr >/dev/null 2>&1; then
+        echo unknown
+      elif out=$(HERDR_SOCKET_PATH="$2" herdr tab get "$3" 2>&1); then
+        printf '%s' "$out" | jq -r --arg n "$4" '.result.tab.label as $l
+          | if $l == $n then "present" elif ($l | type) == "string" then "absent" else "unknown" end' 2>/dev/null ||
+          echo unknown
+      elif printf '%s' "$out" | jq -e '.error.code == "tab_not_found" or .error.code == "server_not_running"' >/dev/null 2>&1; then
+        echo absent
+      else
+        echo unknown
+      fi
       ;;
     tmux)
-      command -v tmux >/dev/null 2>&1 || return 1
-      if out=$(tmux -S "$2" list-windows -a -F '#{window_id}' 2>&1); then
-        ! printf '%s\n' "$out" | grep -qx -- "$3"
+      if ! command -v tmux >/dev/null 2>&1; then
+        echo unknown
+      elif out=$(tmux -S "$2" list-windows -a -F '#{pid} #{window_id} #{window_name}' 2>&1); then
+        if printf '%s\n' "$out" | awk -v p="${5:-}" -v w="$3" -v n="$4" '$2 == w && $3 == n && (p == "" || $1 == p) { f = 1 } END { exit !f }'; then
+          echo present
+        else
+          echo absent
+        fi
       else
         # A dead server leaves its socket file behind; tmux then says no server is running there.
         case $out in
-          *"no server running"* | *"No such file or directory"*) return 0 ;;
-          *) return 1 ;;
+          *"no server running"* | *"No such file or directory"*) echo absent ;;
+          *) echo unknown ;;
         esac
       fi
       ;;
-    *) return 1 ;;
+    *) echo unknown ;;
   esac
 }
 
-# True once worker $4's tab or window ($1 herdr|tmux, socket $2, id $3) is gone from its server, waiting up to
-# 5 seconds, and no session named $4 is listed. A worker held at a startup prompt never registers, so the
-# session list alone would call it gone while its tab or window still runs.
+# True once worker $4's tab or window ($1 herdr|tmux, socket $2, id $3, tmux server pid $5) is absent from its
+# server, waiting up to 5 seconds, and no session named $4 is listed. A worker held at a startup prompt never
+# registers, so the session list alone would call it gone while its tab or window still runs.
 worker_gone() {
   local _
   for _ in 1 2 3 4 5 6 7 8 9 10; do
-    if place_gone "$1" "$2" "$3"; then break; fi
+    if [ "$(place_state "$@")" = absent ]; then break; fi
     sleep 0.5
   done
-  place_gone "$1" "$2" "$3" && session_gone "$4"
+  [ "$(place_state "$@")" = absent ] && session_gone "$4"
 }
 
 # True when the session named $1, running in directory $2, is a worker spawn.sh started: the worker record of

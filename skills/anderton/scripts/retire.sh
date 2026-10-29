@@ -25,6 +25,7 @@ id=$(jq -r '.id // empty' "$record")
 launcher=$(jq -r '.launcher // "bg"' "$record")
 tab=$(jq -r '.tab // empty' "$record")
 socket=$(jq -r '.socket // empty' "$record")
+server=$(jq -r '.server // empty' "$record")
 
 # A worker that may still be running keeps its worktree: stop it, or confirm Claude Code no longer lists it.
 if ! command -v claude >/dev/null 2>&1; then
@@ -32,23 +33,15 @@ if ! command -v claude >/dev/null 2>&1; then
   exit 1
 fi
 if [ "$launcher" != bg ]; then
-  # A session in a herdr tab or tmux window has no id for claude stop; closing its tab or window ends it.
-  if [ -n "$tab" ]; then
-    # Addressed to the server it was opened in: the same id in the caller's server can be another window.
+  # A session in a herdr tab or tmux window has no id for claude stop; closing its tab or window ends it. Only
+  # a tab or window place_state recognises as the worker's is closed, in the server it was opened in.
+  if [ "$(place_state "$launcher" "$socket" "$tab" "$name" "$server")" = present ]; then
     case $launcher in
-      herdr)
-        if [ -n "$socket" ] && command -v herdr >/dev/null 2>&1; then
-          HERDR_SOCKET_PATH="$socket" herdr tab close "$tab" >/dev/null 2>&1 || true
-        fi
-        ;;
-      tmux)
-        if [ -n "$socket" ] && command -v tmux >/dev/null 2>&1; then
-          tmux -S "$socket" kill-window -t "$tab" >/dev/null 2>&1 || true
-        fi
-        ;;
+      herdr) HERDR_SOCKET_PATH="$socket" herdr tab close "$tab" >/dev/null 2>&1 || true ;;
+      tmux) tmux -S "$socket" kill-window -t "$tab" >/dev/null 2>&1 || true ;;
     esac
   fi
-  if ! worker_gone "$launcher" "$socket" "$tab" "$name"; then
+  if ! worker_gone "$launcher" "$socket" "$tab" "$name" "$server"; then
     echo "Could not confirm '$name' stopped ($launcher ${tab:-(no id recorded)} in ${socket:-(no server recorded)}); kept its worktree and record." >&2
     exit 1
   fi
