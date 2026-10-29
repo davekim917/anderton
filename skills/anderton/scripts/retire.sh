@@ -48,8 +48,8 @@ if [ "$launcher" != bg ]; then
         ;;
     esac
   fi
-  if ! session_gone "$name"; then
-    echo "Closed $launcher ${tab:-(nothing recorded)}, but '$name' still runs; kept its worktree and record." >&2
+  if ! worker_gone "$launcher" "$socket" "$tab" "$name"; then
+    echo "Could not confirm '$name' stopped ($launcher ${tab:-(no id recorded)} in ${socket:-(no server recorded)}); kept its worktree and record." >&2
     exit 1
   fi
 else

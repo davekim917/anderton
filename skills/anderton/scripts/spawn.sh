@@ -159,7 +159,7 @@ if [ "$launcher" = herdr ]; then
     ! out=$(herdr agent prompt "$name" "$brief" 2>&1); then
     screen=$(herdr agent read "$name" 2>/dev/null | tail -n 20 || true)
     herdr tab close "$tab" >/dev/null 2>&1 || true
-    if ! session_gone "$name"; then
+    if ! worker_gone herdr "$socket" "$tab" "$name"; then
       write_record
       echo "Claude Code in herdr tab '$name' did not take the brief: $out
 $screen

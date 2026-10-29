@@ -154,3 +154,42 @@ session_gone() {
   done
   return 1
 }
+
+# True when herdr tab or tmux window $3 ($1: herdr|tmux) is confirmed gone from the server at socket $2:
+# not found there, or that whole server gone. Anything the check cannot read counts as still there.
+place_gone() {
+  local out
+  if [ -z "$2" ] || [ -z "$3" ]; then return 1; fi
+  case $1 in
+    herdr)
+      command -v herdr >/dev/null 2>&1 || return 1
+      if out=$(HERDR_SOCKET_PATH="$2" herdr tab get "$3" 2>&1); then return 1; fi
+      printf '%s' "$out" | jq -e '.error.code == "tab_not_found" or .error.code == "server_not_running"' >/dev/null 2>&1
+      ;;
+    tmux)
+      command -v tmux >/dev/null 2>&1 || return 1
+      if out=$(tmux -S "$2" list-windows -a -F '#{window_id}' 2>&1); then
+        ! printf '%s\n' "$out" | grep -qx -- "$3"
+      else
+        # A dead server leaves its socket file behind; tmux then says no server is running there.
+        case $out in
+          *"no server running"* | *"No such file or directory"*) return 0 ;;
+          *) return 1 ;;
+        esac
+      fi
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+# True once worker $4's tab or window ($1 herdr|tmux, socket $2, id $3) is gone from its server, waiting up to
+# 5 seconds, and no session named $4 is listed. A worker held at a startup prompt never registers, so the
+# session list alone would call it gone while its tab or window still runs.
+worker_gone() {
+  local _
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    if place_gone "$1" "$2" "$3"; then break; fi
+    sleep 0.5
+  done
+  place_gone "$1" "$2" "$3" && session_gone "$4"
+}
