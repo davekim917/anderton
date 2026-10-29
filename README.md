@@ -25,9 +25,9 @@ Claude Code handles one task per session well. Run several on one repo and the c
 to you: which session is sitting on a permission prompt, which one already opened its PR, which one
 is about to deploy something nobody reviewed.
 
-Anderton hands that job to one of your sessions. It isn't a separate app or a supervisor in its
-own directory. It is a plugin for the Claude Code you already run, so the session in charge is in
-your repo, with your memory, hooks and plugins. Type `/anderton` and that session takes over.
+Anderton hands that job to one of your own sessions. It's a plugin for the Claude Code you already
+run, so the session in charge works in your repo with your memory, hooks and plugins, and you don't
+set up a separate supervisor. Type `/anderton` and that session takes over.
 
 ## What it does
 
@@ -37,22 +37,24 @@ your repo, with your memory, hooks and plugins. Type `/anderton` and that sessio
   [herdr](https://herdr.dev) or tmux it opens in a tab you can watch and type into; elsewhere it
   runs in the background.
 - **Has workers report to it.** Each brief tells the worker to message the Anderton by name with
-  questions, blockers and the finished PR, and not to deploy. A background session has no one
-  reading it, so that is the only place a question gets answered.
+  questions, blockers and the finished PR, and not to deploy. You don't have to check each worker's
+  tab for questions.
 - **Shows you what's waiting on you.** Before every status report it lists the sessions in the repo
   that have stopped for a person: a finished reply, a permission prompt, a multiple-choice question,
   a tool call stuck for over a minute, a blocked background session. Its own workers report to it
   instead, unless one is stuck on a prompt and can't.
 - **Reviews before anything deploys.** Each change gets three questions: is it the right thing to
   build, is it built right ([the engineering bar](skills/anderton/references/good-code.md)), and,
-  for data work, are the numbers right. Passing tests and a bot review count as evidence, not as
-  approval. Work that falls short goes back to the session that wrote it, with the file, the defect
+  for data work, are the numbers right. It treats passing tests and a bot review as evidence to
+  weigh, not as the decision. Work that falls short goes back to the session that wrote it, with the file, the defect
   and the check that proves the fix.
-- **Deploys, and only it.** Workers stop at a PR, or a merge if your repo lets them merge, and
-  report. The Anderton deploys using your repo's own steps, and asks you before any restart.
+- **Owns deploys.** Workers stop at a PR, or a merge if your repo lets them merge, and report. The
+  Anderton deploys using your repo's own steps, and asks you before any restart. If a merge to your
+  main branch deploys on its own, protect the branch or tell the Anderton that workers must not
+  merge; otherwise a worker's merge is a deploy.
 - **Turns repeat mistakes into checks.** When the same mistake happens twice, the fix becomes a
-  check rather than another instruction: make the mistake impossible if possible, else a type, a
-  CI rule or a test, and a written rule only as a last resort. Each new check must fail on the
+  check rather than another instruction. It prefers, in order: a design that can't express the
+  mistake, a type, a CI rule, a test, and a written rule only as a last resort. Each new check must fail on the
   original mistake.
 - **Cleans up.** Retiring a worker stops its session, closes its tab and removes its worktree. A
   worktree with uncommitted or unpushed work is kept; gitignored files are not.
@@ -100,7 +102,8 @@ you can watch it, steer it, and leave it running for hours.
 **What does it cost?**
 
 Each worker is a full Claude Code session and uses your plan the same way a session you open
-yourself does. Three workers cost about what three sessions cost.
+yourself does: three workers cost about what three sessions cost, plus the Anderton itself, which
+reads every diff.
 
 **Is it safe to let it run?**
 
@@ -122,8 +125,10 @@ sent while no session had that name may not have arrived.
 
 **How do I stop everything?**
 
-Ask the Anderton to retire its workers, or run the plugin's `retire.sh <name>` for each. Then
-`/plugin uninstall anderton@anderton`.
+Ask the Anderton to retire its workers. From a plain shell, `retire.sh <name>` does the same; it
+lives in the plugin's `skills/anderton/scripts/` folder under `~/.claude/plugins/cache/`. Then
+`/plugin uninstall anderton@anderton`. Uninstalling leaves `~/.claude/anderton/` (the role and
+worker records) and any worktree that was kept for unpushed work; delete those by hand.
 
 **Does it work with Codex or other agents?**
 
@@ -137,7 +142,7 @@ distro: it runs from its own directory, supports many harnesses and backends, ad
 and has a watcher process that notices a stalled crewmate by itself. Anderton is a lighter take for
 people who live in Claude Code: one skill and four shell scripts inside the setup you already have.
 Without a watcher, it relies on workers reporting in, Claude Code's idle notices, and `waiting.sh`
-catching a worker stuck on a prompt.
+finding a worker stuck on a prompt the next time you ask for status.
 
 **Can I have more than one?**
 
@@ -177,8 +182,8 @@ It reads `~/.claude/sessions/*.json`, keeps sessions whose process is alive and 
 registry says, and finds each transcript under `~/.claude/projects/*/<session id>.jsonl`.
 Background sessions have no registry entry, so it also reads `claude agents --json`. It lists one
 that is `blocked`, and one that is `done` with a turn in the last two days. A worker `spawn.sh`
-started is listed, marked `(worker)`, only while it is blocked on a prompt; otherwise it reports to
-the Anderton.
+started is listed, marked `(worker)`, only while the registry or `claude agents` says it is
+blocked on a prompt; otherwise it reports to the Anderton.
 
 **`spawn.sh [--bg] [--model M] [--effort E] [--mode MODE] [--base REF] <name> [brief-file]`**
 starts a worker: a full Claude Code session named `<name>`, in a new git worktree at
