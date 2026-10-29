@@ -478,19 +478,22 @@ spawn; p_z=$pid; session "$p_z" zzzz-1 "$zeta" zeta-session
 both=0
 for i in 1 2 3 4 5; do
   rm -f "$(holder_path "$zeta" "x$i")" "$(holder_path "$zeta" "y$i")"
-  env CLAUDE_CODE_SESSION_ID=zzzz-1 CLAUDE_PID="$p_z" bash -x "$scripts/claim.sh" --scope "x$i" > "$work/zx" 2>&1 &
+  env CLAUDE_CODE_SESSION_ID=zzzz-1 CLAUDE_PID="$p_z" PS4='+ $(date +%s.%N) ' bash -x "$scripts/claim.sh" --scope "x$i" > "$work/zx" 2>&1 &
   a=$!
-  env CLAUDE_CODE_SESSION_ID=zzzz-1 CLAUDE_PID="$p_z" bash -x "$scripts/claim.sh" --scope "y$i" > "$work/zy" 2>&1 &
+  env CLAUDE_CODE_SESSION_ID=zzzz-1 CLAUDE_PID="$p_z" PS4='+ $(date +%s.%N) ' bash -x "$scripts/claim.sh" --scope "y$i" > "$work/zy" 2>&1 &
   b=$!
   wait "$a" || true
   wait "$b" || true
   if [ -e "$(holder_path "$zeta" "x$i")" ] && [ -e "$(holder_path "$zeta" "y$i")" ]; then
     both=$((both + 1))
     echo "both claimed in round $i:"
-    for f in "$work/zx" "$work/zy"; do
-      echo "--- $f"
-      grep -nE 'mkdir|lock|proc_age|etime|drift|registered_alive|is_holder|jq -en|project_holders|other=|claimed|already' "$f" | head -60
-    done
+    if [ "$both" -eq 1 ]; then
+      for f in "$work/zx" "$work/zy"; do
+        echo "--- $f"
+        sed -n '70,165p' "$f"
+      done
+      ls -la "$CLAUDE_CONFIG_DIR/anderton"
+    fi
   fi
   rm -f "$(holder_path "$zeta" "x$i")" "$(holder_path "$zeta" "y$i")"
 done
