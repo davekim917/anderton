@@ -151,8 +151,15 @@ set -- -n "$name" --permission-mode "$mode"
 id="" tab="" socket="" server=""
 if [ "$launcher" = herdr ]; then
   socket="${HERDR_SOCKET_PATH:-}"
-  out=$(herdr tab create --workspace "$HERDR_WORKSPACE_ID" --cwd "$dir" --label "$name" --no-focus 2>&1) ||
-    failed "Could not open a herdr tab: $out"
+  # A tab's or window's process takes its environment from its multiplexer, not from this script: a non-default
+  # Claude home is passed on, or the worker would register where neither the caller nor these scripts look.
+  if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
+    out=$(herdr tab create --workspace "$HERDR_WORKSPACE_ID" --cwd "$dir" --label "$name" --no-focus \
+      --env "CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR" 2>&1) || failed "Could not open a herdr tab: $out"
+  else
+    out=$(herdr tab create --workspace "$HERDR_WORKSPACE_ID" --cwd "$dir" --label "$name" --no-focus 2>&1) ||
+      failed "Could not open a herdr tab: $out"
+  fi
   tab=$(printf '%s' "$out" | jq -r '.result.tab.tab_id // empty' 2>/dev/null || true)
   pane=$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id // empty' 2>/dev/null || true)
   if [ -z "$tab" ] || [ -z "$pane" ]; then failed "herdr opened no tab: $out"; fi
@@ -178,7 +185,9 @@ elif [ "$launcher" = tmux ]; then
   socket="${TMUX%%,*}"
   server=$(printf '%s' "$TMUX" | cut -d, -f2)
   # Given as separate arguments, the window's command runs without a shell, so the brief needs no quoting.
-  out=$(tmux new-window -d -P -F '#{window_id}' -n "$name" -c "$dir" claude "$@" "$brief" 2>&1) ||
+  set -- claude "$@" "$brief"
+  [ -z "${CLAUDE_CONFIG_DIR:-}" ] || set -- -e "CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR" "$@"
+  out=$(tmux new-window -d -P -F '#{window_id}' -n "$name" -c "$dir" "$@" 2>&1) ||
     failed "Could not open a tmux window: $out"
   tab=$(printf '%s\n' "$out" | grep -E '^@[0-9]+$' | tail -n 1 || true)
   [ -n "$tab" ] || failed "tmux opened no window: $out"
