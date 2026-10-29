@@ -50,16 +50,22 @@ directory.
   Background sessions have no registry entry, so it also reads `claude agents --json`. It lists one
   that is `blocked`, and one that is `done` with a turn in the last two days. It leaves out the
   workers `spawn.sh` started, which report to the Anderton instead.
-- `scripts/spawn.sh [--model M] [--effort E] [--mode MODE] [--base REF] <name> [brief-file]` starts a
-  worker. It is a full background Claude Code session (`claude --bg -n <name>`), in a new git
-  worktree at `$ANDERTON_WORKTREES/wt-<name>` (default: the folder that holds the repository). The
-  base is `origin/HEAD`, else `origin/main`, `origin/master` or `HEAD`.
+- `scripts/spawn.sh [--bg] [--model M] [--effort E] [--mode MODE] [--base REF] <name> [brief-file]`
+  starts a worker: a full Claude Code session named `<name>`, in a new git worktree at
+  `$ANDERTON_WORKTREES/wt-<name>` (default: the folder that holds the repository). The base is
+  `origin/HEAD`, else `origin/main`, `origin/master` or `HEAD`.
+  - When the caller runs inside [herdr](https://herdr.dev) (`HERDR_ENV=1`), the worker opens in a new
+    tab of the caller's workspace, labelled `<name>`, where the user can watch it and type into it
+    (`herdr tab create`, `herdr agent start --kind claude`, then `herdr agent prompt` with the brief).
+    If Claude Code stops at a startup prompt there, the spawn shows the screen, closes the tab and
+    fails. Elsewhere, or with `--bg`, it is a background session (`claude --bg`).
   - It runs in the caller's permission mode, read from the caller's transcript, because a session
     in another mode holds the caller's messages for its user's approval.
   - The brief, from the file or stdin, gets a closing rule: report to the caller by name with
     SendMessage, and don't deploy, restart or message anyone off the machine.
   - The worker is recorded in `~/.claude/anderton/workers/<name>.json`.
-- `scripts/retire.sh <name>` stops that worker and removes its worktree and record. It exits 3 and
+- `scripts/retire.sh <name>` stops that worker (closing its herdr tab, or `claude stop` for a
+  background one) and removes its worktree and record. It exits 3 and
   keeps the worktree when the worktree has uncommitted changes, or commits since it started that
   no remote branch has.
 

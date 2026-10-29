@@ -14,7 +14,7 @@ cleanup() {
 trap cleanup EXIT
 
 export CLAUDE_CONFIG_DIR="$work/claude"
-unset CLAUDE_PID CLAUDE_CODE_SESSION_ID
+unset CLAUDE_PID CLAUDE_CODE_SESSION_ID HERDR_ENV HERDR_WORKSPACE_ID HERDR_PANE_ID HERDR_TAB_ID HERDR_SOCKET_PATH
 # A fake claude CLI, so no test reaches this machine's real sessions: `agents --json` prints $FAKE_AGENTS,
 # `--bg` logs its directory and arguments, `stop` and `rm` log themselves.
 mkdir -p "$work/bin"
@@ -35,6 +35,29 @@ case $1 in
 esac
 FAKE
 chmod +x "$work/bin/claude"
+# A fake herdr: `tab create` opens tab w9:t5, `agent start` and `agent prompt` log what they got, `tab close`
+# logs the tab and, with $FAKE_HERDR_CLOSE_ENDS, ends the session in it.
+cat > "$work/bin/herdr" <<'FAKE'
+#!/usr/bin/env bash
+case "$1 $2" in
+  "tab create")
+    printf '%s\n' "$@" > "$FAKE_LOG.tab"
+    echo '{"id":"cli:tab:create","result":{"root_pane":{"pane_id":"w9:p5","tab_id":"w9:t5"},"tab":{"tab_id":"w9:t5"},"type":"tab_created"}}'
+    ;;
+  "agent start")
+    printf '%s\n' "$@" > "$FAKE_LOG.start"
+    if [ -n "${FAKE_HERDR_START_FAIL:-}" ]; then echo '{"error":{"code":"agent_not_ready"}}'; exit 1; fi
+    ;;
+  "agent prompt") printf '%s' "$4" > "$FAKE_LOG.prompt" ;;
+  "agent read") echo "Quick safety check: Is this a project you trust?" ;;
+  "tab close")
+    echo "$3" >> "$FAKE_LOG.closed"
+    if [ -n "${FAKE_HERDR_CLOSE_ENDS:-}" ]; then echo '[]' > "$FAKE_AGENTS"; fi
+    ;;
+  *) exit 1 ;;
+esac
+FAKE
+chmod +x "$work/bin/herdr"
 export PATH="$work/bin:$PATH" FAKE_AGENTS="$work/agents.json" FAKE_LOG="$work/claude-log"
 echo '[]' > "$FAKE_AGENTS"
 mkdir -p "$CLAUDE_CONFIG_DIR/sessions" "$CLAUDE_CONFIG_DIR/projects/p" "$work/beta"
@@ -433,6 +456,52 @@ check "and its record" [ ! -e "$CLAUDE_CONFIG_DIR/anderton/workers/fix-login.jso
 check "and the session, by id" grep -qx "rm a1b2c3d4" "$FAKE_LOG.life"
 run "$scripts/retire.sh" never-started
 check "it refuses a worker spawn.sh did not start" [ "$status" -eq 1 ]
+
+# Inside herdr a worker opens in its own tab; retire.sh closes the tab.
+herdr_env="HERDR_ENV=1 HERDR_WORKSPACE_ID=w9"
+rm -f "$FAKE_LOG.bg"
+run env $herdr_env "$scripts/spawn.sh" tab-worker <<'BRIEF'
+Tidy the README.
+BRIEF
+check "inside herdr, spawn.sh starts the worker" [ "$status" -eq 0 ]
+check "in a new tab of the caller's workspace" grep -qx -- "w9" "$FAKE_LOG.tab"
+check "opened on its worktree" grep -qx -- "$work/wt-tab-worker" "$FAKE_LOG.tab"
+check "labelled with its name" grep -qx -- "tab-worker" "$FAKE_LOG.tab"
+check "running claude in that tab's pane" [ "$(tr '\n' ' ' < "$FAKE_LOG.start")" = "agent start tab-worker --kind claude --pane w9:p5 --timeout 120000 -- -n tab-worker --permission-mode acceptEdits " ]
+check "given the brief" grep -qF "Tidy the README." "$FAKE_LOG.prompt"
+check "and told to report to the caller by name" grep -qF 'Tell "lead-session" by SendMessage' "$FAKE_LOG.prompt"
+check "not started in the background" [ ! -e "$FAKE_LOG.bg" ]
+check "recording its tab, which retire.sh closes" [ "$(jq -r '"\(.launcher) \(.tab)"' "$CLAUDE_CONFIG_DIR/anderton/workers/tab-worker.json")" = "herdr w9:t5" ]
+
+run env $herdr_env "$scripts/spawn.sh" --bg bg-in-herdr <<'BRIEF'
+Task.
+BRIEF
+check "--bg starts it in the background even inside herdr" [ "$status" -eq 0 ] && [ "$(sed -n 1p "$FAKE_LOG.bg")" = "$work/wt-bg-in-herdr" ]
+echo '[]' > "$FAKE_AGENTS"
+run "$scripts/retire.sh" bg-in-herdr
+
+: > "$FAKE_LOG.closed"
+run env $herdr_env FAKE_HERDR_START_FAIL=1 "$scripts/spawn.sh" stuck-tab <<'BRIEF'
+Task.
+BRIEF
+check "a tab whose claude never becomes ready fails the spawn" [ "$status" -eq 1 ]
+check "showing what it is stuck on" contains "Is this a project you trust?"
+check "and offering --bg" contains "Rerun with --bg"
+check "closing that tab" grep -qx "w9:t5" "$FAKE_LOG.closed"
+check "releasing its name" [ ! -e "$CLAUDE_CONFIG_DIR/anderton/workers/stuck-tab.json" ]
+check "and removing its worktree" [ ! -e "$work/wt-stuck-tab" ]
+
+: > "$FAKE_LOG.closed"
+: > "$FAKE_LOG.life"
+echo '[{"kind":"interactive","name":"tab-worker","id":null,"cwd":"/","status":"busy"}]' > "$FAKE_AGENTS"
+run "$scripts/retire.sh" tab-worker
+check "retire.sh keeps a tab worker that is still running after its tab closed" [ "$status" -eq 1 ] && [ -d "$work/wt-tab-worker" ]
+check "and its record" [ -f "$CLAUDE_CONFIG_DIR/anderton/workers/tab-worker.json" ]
+run env FAKE_HERDR_CLOSE_ENDS=1 "$scripts/retire.sh" tab-worker
+check "it retires a tab worker by closing its tab" [ "$status" -eq 0 ] && grep -qx "w9:t5" "$FAKE_LOG.closed"
+check "removing its worktree" [ ! -e "$work/wt-tab-worker" ]
+check "and its record" [ ! -e "$CLAUDE_CONFIG_DIR/anderton/workers/tab-worker.json" ]
+check "without claude stop or rm, which need an id a tab session lacks" [ ! -s "$FAKE_LOG.life" ]
 
 # Project epsilon: the project role plus named scopes, each with its own holder.
 mkdir "$work/epsilon"

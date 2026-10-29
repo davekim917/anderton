@@ -22,21 +22,41 @@ dir=$(jq -r .dir "$record")
 root=$(jq -r .root "$record")
 worktree=$(jq -r .worktree "$record")
 id=$(jq -r '.id // empty' "$record")
+launcher=$(jq -r '.launcher // "bg"' "$record")
+tab=$(jq -r '.tab // empty' "$record")
 
 # A worker that may still be running keeps its worktree: stop it, or confirm Claude Code no longer lists it.
 if ! command -v claude >/dev/null 2>&1; then
   echo "retire.sh needs the claude CLI to stop '$name' first." >&2
   exit 1
 fi
-if [ -z "$id" ]; then
-  echo "The record for '$name' has no session id; stop it by hand (claude agents), then rerun." >&2
-  exit 1
-fi
-if ! claude stop "$id" >/dev/null 2>&1; then
-  if ! listed=$(claude agents --json 2>/dev/null) ||
-    ! printf '%s' "$listed" | jq -e --arg id "$id" 'all(.[]; .id != $id)' >/dev/null 2>&1; then
-    echo "Could not stop '$name' ($id), and it is not confirmed gone; kept its worktree and record." >&2
+if [ "$launcher" = herdr ]; then
+  # A session in a tab has no id for claude stop; closing its tab ends it, and it then drops out of the list.
+  if command -v herdr >/dev/null 2>&1 && [ -n "$tab" ]; then herdr tab close "$tab" >/dev/null 2>&1 || true; fi
+  gone=""
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    if listed=$(claude agents --json 2>/dev/null) &&
+      printf '%s' "$listed" | jq -e --arg n "$name" 'all(.[]; .name != $n)' >/dev/null 2>&1; then
+      gone=1
+      break
+    fi
+    sleep 0.5
+  done
+  if [ -z "$gone" ]; then
+    echo "Closed herdr tab ${tab:-(none recorded)}, but '$name' still runs; kept its worktree and record." >&2
     exit 1
+  fi
+else
+  if [ -z "$id" ]; then
+    echo "The record for '$name' has no session id; stop it by hand (claude agents), then rerun." >&2
+    exit 1
+  fi
+  if ! claude stop "$id" >/dev/null 2>&1; then
+    if ! listed=$(claude agents --json 2>/dev/null) ||
+      ! printf '%s' "$listed" | jq -e --arg id "$id" 'all(.[]; .id != $id)' >/dev/null 2>&1; then
+      echo "Could not stop '$name' ($id), and it is not confirmed gone; kept its worktree and record." >&2
+      exit 1
+    fi
   fi
 fi
 
@@ -51,7 +71,7 @@ if [ "$worktree" = true ] && [ -d "$dir" ]; then
   fi
   git -C "$root" worktree remove "$dir"
 fi
-if ! claude rm "$id" >/dev/null 2>&1; then
+if [ "$launcher" != herdr ] && ! claude rm "$id" >/dev/null 2>&1; then
   echo "Stopped '$name' and removed its worktree, but claude rm $id failed; kept the record. Rerun to finish." >&2
   exit 1
 fi

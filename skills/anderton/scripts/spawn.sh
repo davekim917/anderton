@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Start a real Claude Code session in the background to do one task: in its own worktree of the caller's
-# repository (outside the checkout), in the caller's permission mode, told to report to the caller by name.
-# usage: spawn.sh [--model M] [--effort E] [--mode MODE] [--base REF] <name> [brief-file]   (else the brief on stdin)
+# Start a real Claude Code session to do one task: in its own worktree of the caller's repository (outside the
+# checkout), in the caller's permission mode, told to report to the caller by name. Inside herdr it opens in a new
+# tab the user can watch and type into; elsewhere, or with --bg, it runs in the background.
+# usage: spawn.sh [--bg] [--model M] [--effort E] [--mode MODE] [--base REF] <name> [brief-file]   (else the brief on stdin)
 # Worktrees go under $ANDERTON_WORKTREES, default the folder that holds the repository, as wt-<name>.
 # Portable to macOS's bash 3.2 and BSD userland.
 set -euo pipefail
@@ -14,10 +15,11 @@ command -v claude >/dev/null 2>&1 || {
   exit 1
 }
 
-usage="usage: spawn.sh [--model M] [--effort E] [--mode MODE] [--base REF] <name: a-z 0-9 -> [brief-file]"
-model="" effort="" mode="" base=""
+usage="usage: spawn.sh [--bg] [--model M] [--effort E] [--mode MODE] [--base REF] <name: a-z 0-9 -> [brief-file]"
+model="" effort="" mode="" base="" launcher=""
 while [ $# -gt 0 ]; do
   case $1 in
+    --bg) launcher=bg; shift ;;
     --model | --effort | --mode | --base)
       [ $# -ge 2 ] || { echo "$usage" >&2; exit 2; }
       case $1 in
@@ -37,6 +39,13 @@ case $name in
   '' | -* | *[!a-z0-9-]*) echo "$usage" >&2; exit 2 ;;
 esac
 if [ -n "${2:-}" ]; then brief=$(cat "$2"); else brief=$(cat); fi
+if [ -z "$launcher" ]; then
+  if [ "${HERDR_ENV:-}" = 1 ] && [ -n "${HERDR_WORKSPACE_ID:-}" ] && command -v herdr >/dev/null 2>&1; then
+    launcher=herdr
+  else
+    launcher=bg
+  fi
+fi
 if [ -z "$(printf '%s' "$brief" | tr -d '[:space:]')" ]; then
   echo "spawn.sh: the brief is empty." >&2
   exit 2
@@ -115,21 +124,44 @@ You are a worker the Anderton session \"$me\" started for the task above, in $di
 - Tell \"$me\" by SendMessage the moment you have a question or a blocker, with your recommendation, and when you finish: the PR link and what you verified. Nobody reads this session, so a question left only in your reply is never answered.
 - Do not deploy, restart a service, or message anyone off this machine unless the task says to; \"$me\" owns those."
 
-set -- --bg -n "$name" --permission-mode "$mode"
+failed() {
+  [ -z "${1:-}" ] || echo "$1" >&2
+  if [ "$worktree" = true ]; then git -C "$root" worktree remove --force "$dir"; fi
+  exit 1
+}
+
+set -- -n "$name" --permission-mode "$mode"
 [ -z "$model" ] || set -- "$@" --model "$model"
 [ -z "$effort" ] || set -- "$@" --effort "$effort"
-if ! out=$(cd "$dir" && claude "$@" "$brief" 2>&1); then
-  echo "$out" >&2
-  if [ "$worktree" = true ]; then git -C "$root" worktree remove "$dir"; fi
-  exit 1
+id="" tab=""
+if [ "$launcher" = herdr ]; then
+  out=$(herdr tab create --workspace "$HERDR_WORKSPACE_ID" --cwd "$dir" --label "$name" --no-focus 2>&1) ||
+    failed "Could not open a herdr tab: $out"
+  tab=$(printf '%s' "$out" | jq -r '.result.tab.tab_id // empty' 2>/dev/null || true)
+  pane=$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id // empty' 2>/dev/null || true)
+  if [ -z "$tab" ] || [ -z "$pane" ]; then failed "herdr opened no tab: $out"; fi
+  # A startup prompt (folder trust, a new permission mode) leaves the agent blocked: show it, then undo.
+  if ! out=$(herdr agent start "$name" --kind claude --pane "$pane" --timeout 120000 -- "$@" 2>&1) ||
+    ! out=$(herdr agent prompt "$name" "$brief" 2>&1); then
+    screen=$(herdr agent read "$name" 2>/dev/null | tail -n 20 || true)
+    herdr tab close "$tab" >/dev/null 2>&1 || true
+    failed "Claude Code in herdr tab '$name' did not take the brief: $out
+$screen
+Rerun with --bg to start it in the background instead."
+  fi
+  where="herdr tab '$name' ($tab)"
+else
+  out=$(cd "$dir" && claude --bg "$@" "$brief" 2>&1) || failed "$out"
+  # `claude stop` and `claude rm` take the session's id, not its name.
+  id=$(claude agents --json 2>/dev/null | jq -r --arg n "$name" 'first(.[] | select(.name == $n) | .id) // empty' 2>/dev/null || true)
+  [ -n "$id" ] || id=$(printf '%s\n' "$out" | sed -n 's/^backgrounded · \([0-9a-f]*\) · .*/\1/p' | head -n 1)
+  printf '%s\n' "$out"
+  where="the background (${id:-id unknown})"
 fi
 
-# `claude stop` and `claude rm` take the session's id, not its name.
-id=$(claude agents --json 2>/dev/null | jq -r --arg n "$name" 'first(.[] | select(.name == $n) | .id) // empty' 2>/dev/null || true)
-[ -n "$id" ] || id=$(printf '%s\n' "$out" | sed -n 's/^backgrounded · \([0-9a-f]*\) · .*/\1/p' | head -n 1)
-jq -nc --arg name "$name" --arg id "$id" --arg dir "$dir" --arg root "$root" --arg base "$base" --arg spawner "$me" \
-  --argjson worktree "$worktree" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  '{name: $name, id: $id, dir: $dir, root: $root, base: $base, worktree: $worktree, spawner: $spawner, startedAt: $at}' >| "$record"
+jq -nc --arg name "$name" --arg launcher "$launcher" --arg id "$id" --arg tab "$tab" --arg dir "$dir" --arg root "$root" \
+  --arg base "$base" --arg spawner "$me" --argjson worktree "$worktree" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  '{name: $name, launcher: $launcher, id: $id, tab: $tab, dir: $dir, root: $root, base: $base, worktree: $worktree,
+    spawner: $spawner, startedAt: $at}' >| "$record"
 reserved=""
-printf '%s\n' "$out"
-echo "Started worker '$name' (${id:-id unknown}) in $dir ($mode). It reports to '$me'."
+echo "Started worker '$name' in $where, in $dir ($mode). It reports to '$me'."
