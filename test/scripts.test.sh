@@ -377,6 +377,10 @@ check "an unnamed caller is refused: the worker would have no one to report to" 
 # waiting.sh: background sessions come from `claude agents --json`, which the registry does not list.
 printf '{"type":"assistant","timestamp":"%s","message":{"content":[{"type":"text","text":"Blocked: which bucket?"}]}}\n' \
   "$recent" > "$CLAUDE_CONFIG_DIR/projects/p/bg-1.jsonl"
+printf '{"type":"assistant","timestamp":"%s","message":{"content":[{"type":"text","text":"I will check the settings."}]}}\n{"type":"assistant","timestamp":"%s","message":{"content":[{"type":"tool_use","id":"q1","name":"AskUserQuestion","input":{"questions":[{"question":"Which bucket for prod?","options":[{"label":"east"},{"label":"west"}]}]}}]}}\n' \
+  "$recent" "$recent" > "$CLAUDE_CONFIG_DIR/projects/p/bg-4.jsonl"
+printf '{"type":"assistant","timestamp":"%s","message":{"content":[{"type":"tool_use","id":"b1","name":"Bash","input":{"command":"terraform apply"}}]}}\n' \
+  "$recent" > "$CLAUDE_CONFIG_DIR/projects/p/bg-5.jsonl"
 printf '{"type":"assistant","timestamp":"2020-01-01T00:00:00Z","message":{"content":[{"type":"text","text":"Old result."}]}}\n' \
   > "$CLAUDE_CONFIG_DIR/projects/p/bg-2.jsonl"
 printf '{"type":"assistant","timestamp":"%s","message":{"content":[{"type":"text","text":"Worker question."}]}}\n' \
@@ -385,13 +389,18 @@ jq -nc --arg a "$alpha" --arg w "$work/wt-fix-login" --arg b "$beta" '[
   {kind: "background", name: "photo", sessionId: "bg-1", cwd: $a, state: "blocked"},
   {kind: "background", name: "stale-bg", sessionId: "bg-2", cwd: $a, state: "done"},
   {kind: "background", name: "fix-login", sessionId: "bg-3", cwd: $w, state: "blocked"},
-  {kind: "background", name: "beta-bg", sessionId: "bg-1", cwd: $b, state: "blocked"}]' > "$FAKE_AGENTS"
+  {kind: "background", name: "beta-bg", sessionId: "bg-1", cwd: $b, state: "blocked"},
+  {kind: "background", name: "asking-bg", sessionId: "bg-4", cwd: $a, state: "blocked"},
+  {kind: "background", name: "prompt-bg", sessionId: "bg-5", cwd: $a, state: "blocked"}]' > "$FAKE_AGENTS"
 out=$(env CLAUDE_PID="$p_lead" "$scripts/waiting.sh")
 check "lists a blocked background session in the project, with its last text" contains "=== photo  $alpha  (background, blocked"
 check "shows what it said" contains "Blocked: which bucket?"
 check "leaves out a background session done more than two days ago" eval '! contains "stale-bg"'
 check "leaves out a worker spawn.sh started" eval '! contains "=== fix-login"'
 check "leaves out another project's background session" eval '! contains "beta-bg"'
+check "shows the question a blocked background session is asking" contains "Which bucket for prod? [east / west]"
+check "not the text before it" eval '! contains "I will check the settings."'
+check "shows the call a blocked background session waits on" contains 'Bash (pending): {"command":"terraform apply"}'
 echo '[]' > "$FAKE_AGENTS"
 
 echo '[{"kind":"background","name":"fix-login","id":"a1b2c3d4","sessionId":"bg-3","cwd":"/","state":"working"}]' > "$FAKE_AGENTS"

@@ -124,8 +124,17 @@ claude agents --json 2>/dev/null |
             | [.message.content[]? | objects | select(.type == "text") | .text] | join("\n")
             | select(. != "")] | last // "") as $said
         | ([$e[] | .timestamp // empty] | last // "") as $at
+        | (reduce $e[] as $x ({}; reduce ($x.message.content[]? | objects) as $c (.;
+            if $c.type == "tool_use" and $x.type == "assistant" then .[$c.id // "?"] = {name: $c.name, input: $c.input}
+            elif $c.type == "tool_result" then del(.[$c.tool_use_id // "?"])
+            else . end))) as $open
+        | ([$open[] | select(.name == "AskUserQuestion") | .input.questions[]?
+            | "\(.question) [\([.options[]?.label] | join(" / "))]"] | join("\n")) as $ask
+        | ([$open[] | select(.name != "AskUserQuestion") | "\(.name) (pending): \(.input | tojson | .[0:200])"]
+            | join("\n")) as $calls
         | if $state == "done" and $at < (now - 2 * 86400 | todate) then empty
-          else "=== \($name)  \($cwd)  (background, \($state)\(if $at != "" then " since \($at)" else "" end))\n\($said[-900:])\n"
+          else "=== \($name)  \($cwd)  (background, \($state)\(if $at != "" then " since \($at)" else "" end))\n"
+            + (if $ask != "" then $ask else ([$calls, $said[-900:]] | map(select(. != "")) | join("\n")) end) + "\n"
           end' || echo "waiting.sh: could not read $t" >&2
       break
     done
