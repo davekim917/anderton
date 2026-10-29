@@ -2,7 +2,8 @@
 # List the live Claude Code sessions in the caller's project (every project with --all) that are
 # waiting on a person: their turn ended with Claude talking, or it is blocked on a prompt. The
 # sessions holding an Anderton role in the caller's project, its own or a scope's, are left out, and
-# so are the workers spawn.sh started, which report to them.
+# so are the workers spawn.sh started, which report to them, unless one is blocked on a prompt: a
+# worker held there cannot send its report.
 # Portable to macOS's bash 3.2 and BSD userland: jq does the date arithmetic, not date -d.
 set -euo pipefail
 # shellcheck source=SCRIPTDIR/session-lib.sh
@@ -33,7 +34,12 @@ EOF
   done <<EOF
 $records
 EOF
-  if [ -n "$held" ] || is_worker "$name" "$cwd"; then continue; fi
+  [ -z "$held" ] || continue
+  tag=""
+  if is_worker "$name" "$cwd"; then
+    [ "$(jq -r '.status // ""' "$s" 2>/dev/null)" = waiting ] || continue
+    tag=" (worker)"
+  fi
   if [ -z "$all" ] && { [ -z "$cwd" ] || [ "$(project_root "$cwd")" != "$root" ]; }; then
     continue
   fi
@@ -63,7 +69,7 @@ EOF
         tail -n 200 "$f"
       done
     fi
-  } | jq -nrR --slurpfile reg "$s" --arg name "${name:-${sid%%-*}}" --arg cwd "$cwd" '
+  } | jq -nrR --slurpfile reg "$s" --arg name "${name:-${sid%%-*}}${tag}" --arg cwd "$cwd" '
     def blocks: .message.content | if type == "string" then [{type: "text", text: .}] elif type == "array" then . else [] end;
     def human: .type == "user" and (.isMeta | not)
       and (blocks | all(.[]; .type != "tool_result"))
@@ -118,13 +124,18 @@ claude agents --json 2>/dev/null |
   jq -r '.[]? | select(.kind == "background" and (.state == "blocked" or .state == "done"))
     | [.name // "", .sessionId // "", .cwd // "", .state] | join("\u001f")' 2>/dev/null |
   while IFS=$'\x1f' read -r name sid cwd state; do
-    if [ -z "$sid" ] || is_worker "$name" "$cwd"; then continue; fi
+    [ -n "$sid" ] || continue
+    tag=""
+    if is_worker "$name" "$cwd"; then
+      [ "$state" = blocked ] || continue
+      tag=" (worker)"
+    fi
     if [ -z "$all" ] && { [ -z "$cwd" ] || [ "$(project_root "$cwd")" != "$root" ]; }; then
       continue
     fi
     for t in "$home"/projects/*/"$sid".jsonl; do
       [ -e "$t" ] || continue
-      tail -n 400 "$t" | jq -nrR --arg name "${name:-${sid%%-*}}" --arg cwd "$cwd" --arg state "$state" '
+      tail -n 400 "$t" | jq -nrR --arg name "${name:-${sid%%-*}}${tag}" --arg cwd "$cwd" --arg state "$state" '
         [inputs | fromjson? | objects] as $e
         | ([$e[] | select(.type == "assistant")
             | [.message.content[]? | objects | select(.type == "text") | .text] | join("\n")
