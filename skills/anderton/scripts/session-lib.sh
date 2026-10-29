@@ -141,3 +141,16 @@ project_holders() {
     if [ "$(jq -r 'select(.scope != null) | .root' "$f" 2>/dev/null || true)" = "$1" ]; then printf '%s\n' "$f"; fi
   done
 }
+
+# True once `claude agents` lists no session named $1, after waiting up to 5 seconds for one that is exiting.
+session_gone() {
+  local listed _
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    if listed=$(claude agents --json 2>/dev/null) &&
+      printf '%s' "$listed" | jq -e --arg n "$1" 'all(.[]; .name != $n)' >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.5
+  done
+  return 1
+}

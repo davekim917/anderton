@@ -33,16 +33,7 @@ fi
 if [ "$launcher" = herdr ]; then
   # A session in a tab has no id for claude stop; closing its tab ends it, and it then drops out of the list.
   if command -v herdr >/dev/null 2>&1 && [ -n "$tab" ]; then herdr tab close "$tab" >/dev/null 2>&1 || true; fi
-  gone=""
-  for _ in 1 2 3 4 5 6 7 8 9 10; do
-    if listed=$(claude agents --json 2>/dev/null) &&
-      printf '%s' "$listed" | jq -e --arg n "$name" 'all(.[]; .name != $n)' >/dev/null 2>&1; then
-      gone=1
-      break
-    fi
-    sleep 0.5
-  done
-  if [ -z "$gone" ]; then
+  if ! session_gone "$name"; then
     echo "Closed herdr tab ${tab:-(none recorded)}, but '$name' still runs; kept its worktree and record." >&2
     exit 1
   fi

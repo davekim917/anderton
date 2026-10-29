@@ -35,8 +35,9 @@ case $1 in
 esac
 FAKE
 chmod +x "$work/bin/claude"
-# A fake herdr: `tab create` opens tab w9:t5, `agent start` and `agent prompt` log what they got, `tab close`
-# logs the tab and, with $FAKE_HERDR_CLOSE_ENDS, ends the session in it.
+# A fake herdr: `tab create` opens tab w9:t5, `agent start` and `agent prompt` log what they got (with
+# $FAKE_HERDR_START_LIVE, start lists the session as live), `tab close` logs the tab and, with
+# $FAKE_HERDR_CLOSE_ENDS, ends the session in it.
 cat > "$work/bin/herdr" <<'FAKE'
 #!/usr/bin/env bash
 case "$1 $2" in
@@ -46,6 +47,7 @@ case "$1 $2" in
     ;;
   "agent start")
     printf '%s\n' "$@" > "$FAKE_LOG.start"
+    if [ -n "${FAKE_HERDR_START_LIVE:-}" ]; then printf '[{"kind":"interactive","name":"%s","id":null}]\n' "$3" > "$FAKE_AGENTS"; fi
     if [ -n "${FAKE_HERDR_START_FAIL:-}" ]; then echo '{"error":{"code":"agent_not_ready"}}'; exit 1; fi
     ;;
   "agent prompt") printf '%s' "$4" > "$FAKE_LOG.prompt" ;;
@@ -490,6 +492,16 @@ check "and offering --bg" contains "Rerun with --bg"
 check "closing that tab" grep -qx "w9:t5" "$FAKE_LOG.closed"
 check "releasing its name" [ ! -e "$CLAUDE_CONFIG_DIR/anderton/workers/stuck-tab.json" ]
 check "and removing its worktree" [ ! -e "$work/wt-stuck-tab" ]
+run env $herdr_env FAKE_HERDR_START_FAIL=1 FAKE_HERDR_START_LIVE=1 "$scripts/spawn.sh" live-stuck <<'BRIEF'
+Task.
+BRIEF
+check "a failed tab whose session is not confirmed stopped fails the spawn" [ "$status" -eq 1 ]
+check "saying so" contains "not confirmed stopped"
+check "keeping its worktree" [ -d "$work/wt-live-stuck" ]
+check "and a record retire.sh can finish from" [ "$(jq -r '"\(.launcher) \(.tab)"' "$CLAUDE_CONFIG_DIR/anderton/workers/live-stuck.json" 2>/dev/null)" = "herdr w9:t5" ]
+run env FAKE_HERDR_CLOSE_ENDS=1 "$scripts/retire.sh" live-stuck
+check "which it does once the session ends" [ "$status" -eq 0 ]
+check "removing that worktree" [ ! -e "$work/wt-live-stuck" ]
 
 : > "$FAKE_LOG.closed"
 : > "$FAKE_LOG.life"

@@ -124,6 +124,14 @@ You are a worker the Anderton session \"$me\" started for the task above, in $di
 - Tell \"$me\" by SendMessage the moment you have a question or a blocker, with your recommendation, and when you finish: the PR link and what you verified. Nobody reads this session, so a question left only in your reply is never answered.
 - Do not deploy, restart a service, or message anyone off this machine unless the task says to; \"$me\" owns those."
 
+write_record() {
+  jq -nc --arg name "$name" --arg launcher "$launcher" --arg id "$id" --arg tab "$tab" --arg dir "$dir" --arg root "$root" \
+    --arg base "$base" --arg spawner "$me" --argjson worktree "$worktree" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{name: $name, launcher: $launcher, id: $id, tab: $tab, dir: $dir, root: $root, base: $base, worktree: $worktree,
+      spawner: $spawner, startedAt: $at}' >| "$record"
+  reserved=""
+}
+
 failed() {
   [ -z "${1:-}" ] || echo "$1" >&2
   if [ "$worktree" = true ]; then git -C "$root" worktree remove --force "$dir"; fi
@@ -145,6 +153,13 @@ if [ "$launcher" = herdr ]; then
     ! out=$(herdr agent prompt "$name" "$brief" 2>&1); then
     screen=$(herdr agent read "$name" 2>/dev/null | tail -n 20 || true)
     herdr tab close "$tab" >/dev/null 2>&1 || true
+    if ! session_gone "$name"; then
+      write_record
+      echo "Claude Code in herdr tab '$name' did not take the brief: $out
+$screen
+It is not confirmed stopped, so $dir and its record are kept: close tab $tab, then run retire.sh $name." >&2
+      exit 1
+    fi
     failed "Claude Code in herdr tab '$name' did not take the brief: $out
 $screen
 Rerun with --bg to start it in the background instead."
@@ -159,9 +174,5 @@ else
   where="the background (${id:-id unknown})"
 fi
 
-jq -nc --arg name "$name" --arg launcher "$launcher" --arg id "$id" --arg tab "$tab" --arg dir "$dir" --arg root "$root" \
-  --arg base "$base" --arg spawner "$me" --argjson worktree "$worktree" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  '{name: $name, launcher: $launcher, id: $id, tab: $tab, dir: $dir, root: $root, base: $base, worktree: $worktree,
-    spawner: $spawner, startedAt: $at}' >| "$record"
-reserved=""
+write_record
 echo "Started worker '$name' in $where, in $dir ($mode). It reports to '$me'."
