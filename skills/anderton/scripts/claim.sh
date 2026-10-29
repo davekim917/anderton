@@ -38,10 +38,20 @@ mkdir -p "$holders"
 # One lock per project, scopes included: the one-role check reads every role's record in it.
 lock="$(holder_path "$root").lock"
 
-# The claim lock is a directory, since macOS has no flock. Only the claim that made it removes it:
-# deleting one whose owner looks dead races a concurrent claim that has just made a fresh one.
+# The claim lock is flock where the system has it: the kernel releases it when the claim exits, so it
+# cannot go stale, and it holds on filesystems where two concurrent mkdirs can both succeed (seen on
+# a CI runner). macOS has no flock, so there it is a directory. Only the claim that made that removes
+# it: deleting one whose owner looks dead races a concurrent claim that has just made a fresh one.
 take_lock() {
   local tries=0 owner
+  if command -v flock >/dev/null 2>&1; then
+    exec 9>>"$lock.flock"
+    if ! flock -w 10 9; then
+      echo "Could not take $lock.flock within 10 seconds: another claim in this project is running." >&2
+      exit 1
+    fi
+    return
+  fi
   until mkdir "$lock" 2>/dev/null; do
     # Not there, so mkdir failed for another reason: retry once and let it say why.
     if [ ! -e "$lock" ]; then

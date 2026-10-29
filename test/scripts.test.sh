@@ -218,13 +218,19 @@ check "a session in a linked worktree of the same repository is refused" [ "$sta
 mkdir "$state.lock"
 echo "$p_dead" > "$state.lock/pid"
 claim_status cccc-3 "$p_holder"
-check "a lock left by a dead claim stops the claim" [ "$status" -eq 1 ]
-check "that lock is not deleted" [ -d "$state.lock" ]
-check "the report names the lock to remove" contains "was left by claim process $p_dead"
-rm -f "$state.lock/pid"
-rmdir "$state.lock"
-check "the holder claims once the lock is removed" env CLAUDE_CODE_SESSION_ID=cccc-3 "$scripts/claim.sh"
-check "the lock is released" [ ! -e "$state.lock" ]
+if command -v flock >/dev/null 2>&1; then
+  # The kernel drops a dead claim's flock, so nothing it leaves behind can stop a later claim.
+  check "with flock, a lock directory left by a dead claim does not stop the claim" [ "$status" -eq 0 ]
+  rm -rf "$state.lock"
+else
+  check "a lock left by a dead claim stops the claim" [ "$status" -eq 1 ]
+  check "that lock is not deleted" [ -d "$state.lock" ]
+  check "the report names the lock to remove" contains "was left by claim process $p_dead"
+  rm -f "$state.lock/pid"
+  rmdir "$state.lock"
+  check "the holder claims once the lock is removed" env CLAUDE_CODE_SESSION_ID=cccc-3 "$scripts/claim.sh"
+  check "the lock is released" [ ! -e "$state.lock" ]
+fi
 
 # /clear: the holder's process keeps its pid and gets a new session id and transcript.
 session "$p_holder" cccc-9 "$alpha" holder-session
@@ -471,55 +477,23 @@ check "leaves out the project role's holder" eval '! contains "Host Anderton que
 out=$(env CLAUDE_PID="$p_eo" "$scripts/waiting.sh")
 check "from an ordinary session, still leaves out every holder" eval '! contains "Anderton question."'
 
-# DIAGNOSTIC (temporary): is mkdir exclusive on this runner's filesystem?
-echo "fs of $work: $(stat -f -c %T "$work" 2>/dev/null || stat -f "$work" 2>/dev/null | head -1)"
-dbl=0
-for n in $(seq 1 200); do
-  d="$work/mk.$n"
-  ( mkdir "$d" 2>/dev/null && echo a > "$work/mk.$n.a" ) &
-  m1=$!
-  ( mkdir "$d" 2>/dev/null && echo b > "$work/mk.$n.b" ) &
-  m2=$!
-  wait "$m1" "$m2" || true
-  if [ -e "$work/mk.$n.a" ] && [ -e "$work/mk.$n.b" ]; then dbl=$((dbl + 1)); fi
-done
-echo "mkdir double successes: $dbl of 200"
-dbl=0
-for n in $(seq 1 200); do
-  d="$work/mb.$n"
-  ( /bin/mkdir "$d" 2>/dev/null && echo a > "$work/mb.$n.a" ) &
-  m1=$!
-  ( /bin/mkdir "$d" 2>/dev/null && echo b > "$work/mb.$n.b" ) &
-  m2=$!
-  wait "$m1" "$m2" || true
-  if [ -e "$work/mb.$n.a" ] && [ -e "$work/mb.$n.b" ]; then dbl=$((dbl + 1)); fi
-done
-echo "/bin/mkdir double successes: $dbl of 200; mkdir is $(type -a mkdir | tr '\n' ' ')"
-
 # Two claims by one session for different scopes at once: the one-role check must see the other's record.
 mkdir "$work/zeta"
 zeta="$work/zeta"
 spawn; p_z=$pid; session "$p_z" zzzz-1 "$zeta" zeta-session
 both=0
-# shellcheck disable=SC2016
 for i in 1 2 3 4 5; do
   rm -f "$(holder_path "$zeta" "x$i")" "$(holder_path "$zeta" "y$i")"
-  env CLAUDE_CODE_SESSION_ID=zzzz-1 CLAUDE_PID="$p_z" PS4='+ ${EPOCHREALTIME:-} ' bash -x "$scripts/claim.sh" --scope "x$i" > "$work/zx" 2>&1 &
+  env CLAUDE_CODE_SESSION_ID=zzzz-1 CLAUDE_PID="$p_z" "$scripts/claim.sh" --scope "x$i" > "$work/zx" 2>&1 &
   a=$!
-  env CLAUDE_CODE_SESSION_ID=zzzz-1 CLAUDE_PID="$p_z" PS4='+ ${EPOCHREALTIME:-} ' bash -x "$scripts/claim.sh" --scope "y$i" > "$work/zy" 2>&1 &
+  env CLAUDE_CODE_SESSION_ID=zzzz-1 CLAUDE_PID="$p_z" "$scripts/claim.sh" --scope "y$i" > "$work/zy" 2>&1 &
   b=$!
   wait "$a" || true
   wait "$b" || true
   if [ -e "$(holder_path "$zeta" "x$i")" ] && [ -e "$(holder_path "$zeta" "y$i")" ]; then
     both=$((both + 1))
     echo "both claimed in round $i:"
-    if [ "$both" -eq 1 ]; then
-      for f in "$work/zx" "$work/zy"; do
-        echo "--- $f"
-        sed -n '70,165p' "$f"
-      done
-      ls -la "$CLAUDE_CONFIG_DIR/anderton"
-    fi
+    cat "$work/zx" "$work/zy"
   fi
   rm -f "$(holder_path "$zeta" "x$i")" "$(holder_path "$zeta" "y$i")"
 done
