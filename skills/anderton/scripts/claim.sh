@@ -35,7 +35,8 @@ role="Anderton for $root"
 if [ -n "$scope" ]; then role="$role, scope $scope"; fi
 state=$(holder_path "$root" "$scope")
 mkdir -p "$holders"
-lock="$state.lock"
+# One lock per project, scopes included: the one-role check reads every role's record in it.
+lock="$(holder_path "$root").lock"
 
 # The claim lock is a directory, since macOS has no flock. Only the claim that made it removes it:
 # deleting one whose owner looks dead races a concurrent claim that has just made a fresh one.

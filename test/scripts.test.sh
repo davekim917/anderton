@@ -471,5 +471,23 @@ check "leaves out the project role's holder" eval '! contains "Host Anderton que
 out=$(env CLAUDE_PID="$p_eo" "$scripts/waiting.sh")
 check "from an ordinary session, still leaves out every holder" eval '! contains "Anderton question."'
 
+# Two claims by one session for different scopes at once: the one-role check must see the other's record.
+mkdir "$work/zeta"
+zeta="$work/zeta"
+spawn; p_z=$pid; session "$p_z" zzzz-1 "$zeta" zeta-session
+both=0
+for i in 1 2 3 4 5; do
+  rm -f "$(holder_path "$zeta" "x$i")" "$(holder_path "$zeta" "y$i")"
+  env CLAUDE_CODE_SESSION_ID=zzzz-1 CLAUDE_PID="$p_z" "$scripts/claim.sh" --scope "x$i" >/dev/null 2>&1 &
+  a=$!
+  env CLAUDE_CODE_SESSION_ID=zzzz-1 CLAUDE_PID="$p_z" "$scripts/claim.sh" --scope "y$i" >/dev/null 2>&1 &
+  b=$!
+  wait "$a" || true
+  wait "$b" || true
+  if [ -e "$(holder_path "$zeta" "x$i")" ] && [ -e "$(holder_path "$zeta" "y$i")" ]; then both=$((both + 1)); fi
+  rm -f "$(holder_path "$zeta" "x$i")" "$(holder_path "$zeta" "y$i")"
+done
+check "concurrent claims of two scopes by one session never both succeed" [ "$both" -eq 0 ]
+
 [ "$failures" -eq 0 ] || { echo "$failures check(s) failed"; exit 1; }
 echo "all checks passed"
