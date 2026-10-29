@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Start a real Claude Code session to do one task: in its own worktree of the caller's repository (outside the
 # checkout), in the caller's permission mode, told to report to the caller by name. Inside herdr it opens in a new
-# tab the user can watch and type into; elsewhere, or with --bg, it runs in the background.
+# tab, inside tmux in a new window, where the user can watch it and type into it; elsewhere, or with --bg, it runs
+# in the background. $ANDERTON_START_WAIT (seconds, default 30) bounds the wait for a tmux worker to register.
 # usage: spawn.sh [--bg] [--model M] [--effort E] [--mode MODE] [--base REF] <name> [brief-file]   (else the brief on stdin)
 # Worktrees go under $ANDERTON_WORKTREES, default the folder that holds the repository, as wt-<name>.
 # Portable to macOS's bash 3.2 and BSD userland.
@@ -42,6 +43,8 @@ if [ -n "${2:-}" ]; then brief=$(cat "$2"); else brief=$(cat); fi
 if [ -z "$launcher" ]; then
   if [ "${HERDR_ENV:-}" = 1 ] && [ -n "${HERDR_WORKSPACE_ID:-}" ] && command -v herdr >/dev/null 2>&1; then
     launcher=herdr
+  elif [ -n "${TMUX:-}" ] && command -v tmux >/dev/null 2>&1; then
+    launcher=tmux
   else
     launcher=bg
   fi
@@ -165,6 +168,23 @@ $screen
 Rerun with --bg to start it in the background instead."
   fi
   where="herdr tab '$name' ($tab)"
+elif [ "$launcher" = tmux ]; then
+  # Given as separate arguments, the window's command runs without a shell, so the brief needs no quoting.
+  tab=$(tmux new-window -d -P -F '#{window_id}' -n "$name" -c "$dir" claude "$@" "$brief" 2>&1) ||
+    failed "Could not open a tmux window: $tab"
+  # The window closes when claude exits, so a worker that never registers and has no window failed to start.
+  listed="" tries=$(( ${ANDERTON_START_WAIT:-30} * 2 ))
+  while [ "$tries" -gt 0 ]; do
+    if claude agents --json 2>/dev/null | jq -e --arg n "$name" 'any(.[]; .name == $n)' >/dev/null 2>&1; then
+      listed=1
+      break
+    fi
+    tmux list-windows -a -F '#{window_id}' 2>/dev/null | grep -qx -- "$tab" || failed "Claude Code exited at once in tmux window '$name'."
+    tries=$((tries - 1))
+    sleep 0.5
+  done
+  where="tmux window '$name' ($tab)"
+  [ -n "$listed" ] || echo "Worker '$name' has not registered yet: it may be waiting at a startup prompt in its window." >&2
 else
   out=$(cd "$dir" && claude --bg "$@" "$brief" 2>&1) || failed "$out"
   # `claude stop` and `claude rm` take the session's id, not its name.

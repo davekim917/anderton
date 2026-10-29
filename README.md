@@ -58,14 +58,21 @@ directory.
     tab of the caller's workspace, labelled `<name>`, where the user can watch it and type into it
     (`herdr tab create`, `herdr agent start --kind claude`, then `herdr agent prompt` with the brief).
     If Claude Code stops at a startup prompt there, the spawn shows the screen, closes the tab and
-    fails. Elsewhere, or with `--bg`, it is a background session (`claude --bg`).
+    fails, unless the session cannot be confirmed stopped, when it keeps the worktree and record for
+    `retire.sh`.
+  - Inside tmux (`$TMUX`, and not herdr), it opens in a new detached window named `<name>`
+    (`tmux new-window -d -n <name> -c <worktree> claude … <brief>`). The spawn waits up to
+    `$ANDERTON_START_WAIT` seconds (default 30) for the session to register: a window that closes first
+    fails the spawn, and one still open is kept with a note that it may wait at a startup prompt.
+  - Elsewhere, or with `--bg`, it is a background session (`claude --bg`).
   - It runs in the caller's permission mode, read from the caller's transcript, because a session
     in another mode holds the caller's messages for its user's approval.
   - The brief, from the file or stdin, gets a closing rule: report to the caller by name with
     SendMessage, and don't deploy, restart or message anyone off the machine.
   - The worker is recorded in `~/.claude/anderton/workers/<name>.json`.
-- `scripts/retire.sh <name>` stops that worker (closing its herdr tab, or `claude stop` for a
-  background one) and removes its worktree and record. It exits 3 and
+- `scripts/retire.sh <name>` stops that worker (closing its herdr tab or tmux window and waiting for
+  the session to leave `claude agents`, or `claude stop` for a background one) and removes its
+  worktree and record. It exits 3 and
   keeps the worktree when the worktree has uncommitted changes, or commits since it started that
   no remote branch has.
 

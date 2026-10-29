@@ -91,8 +91,8 @@ enough for a sub-agent of this session.
 `--base <ref>`). It makes a worktree beside the repository (under
 `$ANDERTON_WORKTREES` when set), starts a full session there in your permission
 mode, and appends to the brief that the worker reports to you by name. When you run
-inside herdr, the worker opens in a new tab the user can watch and type into; elsewhere,
-or with `--bg`, it runs in the background.
+inside herdr or tmux, the worker opens in a new tab or window the user can watch and
+type into; elsewhere, or with `--bg`, it runs in the background.
 Then:
 - SendMessage the worker with `notify_when_idle`. The notice fires on every turn end,
   not only when the task is done, so check the PR or worktree before you believe it,

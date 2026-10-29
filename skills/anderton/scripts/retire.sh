@@ -30,11 +30,16 @@ if ! command -v claude >/dev/null 2>&1; then
   echo "retire.sh needs the claude CLI to stop '$name' first." >&2
   exit 1
 fi
-if [ "$launcher" = herdr ]; then
-  # A session in a tab has no id for claude stop; closing its tab ends it, and it then drops out of the list.
-  if command -v herdr >/dev/null 2>&1 && [ -n "$tab" ]; then herdr tab close "$tab" >/dev/null 2>&1 || true; fi
+if [ "$launcher" != bg ]; then
+  # A session in a herdr tab or tmux window has no id for claude stop; closing its tab or window ends it.
+  if [ -n "$tab" ]; then
+    case $launcher in
+      herdr) if command -v herdr >/dev/null 2>&1; then herdr tab close "$tab" >/dev/null 2>&1 || true; fi ;;
+      tmux) if command -v tmux >/dev/null 2>&1; then tmux kill-window -t "$tab" >/dev/null 2>&1 || true; fi ;;
+    esac
+  fi
   if ! session_gone "$name"; then
-    echo "Closed herdr tab ${tab:-(none recorded)}, but '$name' still runs; kept its worktree and record." >&2
+    echo "Closed $launcher ${tab:-(nothing recorded)}, but '$name' still runs; kept its worktree and record." >&2
     exit 1
   fi
 else
@@ -62,7 +67,7 @@ if [ "$worktree" = true ] && [ -d "$dir" ]; then
   fi
   git -C "$root" worktree remove "$dir"
 fi
-if [ "$launcher" != herdr ] && ! claude rm "$id" >/dev/null 2>&1; then
+if [ "$launcher" = bg ] && ! claude rm "$id" >/dev/null 2>&1; then
   echo "Stopped '$name' and removed its worktree, but claude rm $id failed; kept the record. Rerun to finish." >&2
   exit 1
 fi

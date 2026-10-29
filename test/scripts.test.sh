@@ -14,7 +14,7 @@ cleanup() {
 trap cleanup EXIT
 
 export CLAUDE_CONFIG_DIR="$work/claude"
-unset CLAUDE_PID CLAUDE_CODE_SESSION_ID HERDR_ENV HERDR_WORKSPACE_ID HERDR_PANE_ID HERDR_TAB_ID HERDR_SOCKET_PATH
+unset CLAUDE_PID CLAUDE_CODE_SESSION_ID HERDR_ENV HERDR_WORKSPACE_ID HERDR_PANE_ID HERDR_TAB_ID HERDR_SOCKET_PATH TMUX
 # A fake claude CLI, so no test reaches this machine's real sessions: `agents --json` prints $FAKE_AGENTS,
 # `--bg` logs its directory and arguments, `stop` and `rm` log themselves.
 mkdir -p "$work/bin"
@@ -60,6 +60,27 @@ case "$1 $2" in
 esac
 FAKE
 chmod +x "$work/bin/herdr"
+# A fake tmux: `new-window` logs its arguments and opens window @7 (with $FAKE_TMUX_LIVE the session in it
+# registers; with $FAKE_TMUX_GONE the window has already closed), `kill-window` logs its target and, with
+# $FAKE_TMUX_KILL_ENDS, ends the session.
+cat > "$work/bin/tmux" <<'FAKE'
+#!/usr/bin/env bash
+case $1 in
+  new-window)
+    printf '%s\n' "$@" > "$FAKE_LOG.window"
+    if [ -n "${FAKE_TMUX_FAIL:-}" ]; then echo "no server" >&2; exit 1; fi
+    if [ -n "${FAKE_TMUX_LIVE:-}" ]; then printf '[{"kind":"interactive","name":"%s","id":null}]\n' "$7" > "$FAKE_AGENTS"; fi
+    echo "@7"
+    ;;
+  list-windows) [ -n "${FAKE_TMUX_GONE:-}" ] || echo "@7" ;;
+  kill-window)
+    echo "$3" >> "$FAKE_LOG.killed"
+    if [ -n "${FAKE_TMUX_KILL_ENDS:-}" ]; then echo '[]' > "$FAKE_AGENTS"; fi
+    ;;
+  *) exit 1 ;;
+esac
+FAKE
+chmod +x "$work/bin/tmux"
 export PATH="$work/bin:$PATH" FAKE_AGENTS="$work/agents.json" FAKE_LOG="$work/claude-log"
 echo '[]' > "$FAKE_AGENTS"
 mkdir -p "$CLAUDE_CONFIG_DIR/sessions" "$CLAUDE_CONFIG_DIR/projects/p" "$work/beta"
@@ -514,6 +535,47 @@ check "it retires a tab worker by closing its tab" [ "$status" -eq 0 ] && grep -
 check "removing its worktree" [ ! -e "$work/wt-tab-worker" ]
 check "and its record" [ ! -e "$CLAUDE_CONFIG_DIR/anderton/workers/tab-worker.json" ]
 check "without claude stop or rm, which need an id a tab session lacks" [ ! -s "$FAKE_LOG.life" ]
+
+# Inside tmux a worker opens in its own window; retire.sh kills the window.
+echo '[]' > "$FAKE_AGENTS"
+rm -f "$FAKE_LOG.bg"
+run env TMUX=/tmp/fake-tmux,1,0 FAKE_TMUX_LIVE=1 "$scripts/spawn.sh" tmux-worker <<'BRIEF'
+Tidy the changelog.
+BRIEF
+check "inside tmux, spawn.sh starts the worker" [ "$status" -eq 0 ]
+check "in a new window, detached, named for it, on its worktree, running claude in the caller's mode" \
+  [ "$(head -n 14 "$FAKE_LOG.window" | tr '\n' ' ')" = "new-window -d -P -F #{window_id} -n tmux-worker -c $work/wt-tmux-worker claude -n tmux-worker --permission-mode acceptEdits " ]
+check "with the brief and its report-by-name rule as one argument" grep -qF 'Tell "lead-session" by SendMessage' "$FAKE_LOG.window"
+check "not started in the background" [ ! -e "$FAKE_LOG.bg" ]
+check "recording its window, which retire.sh kills" [ "$(jq -r '"\(.launcher) \(.tab)"' "$CLAUDE_CONFIG_DIR/anderton/workers/tmux-worker.json")" = "tmux @7" ]
+run env TMUX=/tmp/fake-tmux,1,0 HERDR_ENV=1 HERDR_WORKSPACE_ID=w9 "$scripts/spawn.sh" both-muxes <<'BRIEF'
+Task.
+BRIEF
+check "inside herdr and tmux at once, herdr opens it" [ "$(jq -r .launcher "$CLAUDE_CONFIG_DIR/anderton/workers/both-muxes.json" 2>/dev/null)" = herdr ]
+echo '[]' > "$FAKE_AGENTS"
+run "$scripts/retire.sh" both-muxes
+
+run env TMUX=/tmp/fake-tmux,1,0 FAKE_TMUX_GONE=1 "$scripts/spawn.sh" dead-window <<'BRIEF'
+Task.
+BRIEF
+check "a tmux worker whose window closes at once fails the spawn" [ "$status" -eq 1 ]
+check "saying claude exited" contains "exited at once"
+check "releasing its name" [ ! -e "$CLAUDE_CONFIG_DIR/anderton/workers/dead-window.json" ]
+check "and removing its worktree" [ ! -e "$work/wt-dead-window" ]
+run env TMUX=/tmp/fake-tmux,1,0 ANDERTON_START_WAIT=1 "$scripts/spawn.sh" slow-window <<'BRIEF'
+Task.
+BRIEF
+check "a tmux worker still unregistered with its window open is kept" [ "$status" -eq 0 ] && [ -f "$CLAUDE_CONFIG_DIR/anderton/workers/slow-window.json" ]
+check "with a note that it may wait at a startup prompt" contains "may be waiting at a startup prompt"
+run "$scripts/retire.sh" slow-window
+
+: > "$FAKE_LOG.life"
+echo '[{"kind":"interactive","name":"tmux-worker","id":null,"cwd":"/","status":"busy"}]' > "$FAKE_AGENTS"
+run env TMUX=/tmp/fake-tmux,1,0 FAKE_TMUX_KILL_ENDS=1 "$scripts/retire.sh" tmux-worker
+check "retire.sh retires a tmux worker by killing its window" [ "$status" -eq 0 ]
+check "that window" grep -qx "@7" "$FAKE_LOG.killed"
+check "removing its worktree" [ ! -e "$work/wt-tmux-worker" ]
+check "without claude stop or rm" [ ! -s "$FAKE_LOG.life" ]
 
 # Project epsilon: the project role plus named scopes, each with its own holder.
 mkdir "$work/epsilon"
