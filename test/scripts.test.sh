@@ -476,11 +476,12 @@ mkdir "$work/zeta"
 zeta="$work/zeta"
 spawn; p_z=$pid; session "$p_z" zzzz-1 "$zeta" zeta-session
 both=0
+# shellcheck disable=SC2016
 for i in 1 2 3 4 5; do
   rm -f "$(holder_path "$zeta" "x$i")" "$(holder_path "$zeta" "y$i")"
-  env CLAUDE_CODE_SESSION_ID=zzzz-1 CLAUDE_PID="$p_z" PS4='+ $(date +%s.%N) ' bash -x "$scripts/claim.sh" --scope "x$i" > "$work/zx" 2>&1 &
+  env CLAUDE_CODE_SESSION_ID=zzzz-1 CLAUDE_PID="$p_z" PS4='+ ${EPOCHREALTIME:-} ' bash -x "$scripts/claim.sh" --scope "x$i" > "$work/zx" 2>&1 &
   a=$!
-  env CLAUDE_CODE_SESSION_ID=zzzz-1 CLAUDE_PID="$p_z" PS4='+ $(date +%s.%N) ' bash -x "$scripts/claim.sh" --scope "y$i" > "$work/zy" 2>&1 &
+  env CLAUDE_CODE_SESSION_ID=zzzz-1 CLAUDE_PID="$p_z" PS4='+ ${EPOCHREALTIME:-} ' bash -x "$scripts/claim.sh" --scope "y$i" > "$work/zy" 2>&1 &
   b=$!
   wait "$a" || true
   wait "$b" || true
