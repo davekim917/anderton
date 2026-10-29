@@ -68,14 +68,17 @@ if [ -z "$mode" ]; then
   exit 1
 fi
 
-if claude agents --json 2>/dev/null | jq -e --arg n "$name" 'any(.[]; .name == $n)' >/dev/null; then
-  echo "A live session is already named '$name'; pick another name." >&2
-  exit 1
-fi
 mkdir -p "$holders/workers"
 record="$holders/workers/$name.json"
-if [ -e "$record" ]; then
+# Creating the record exclusively reserves the name, so two spawns of one name cannot both pass the checks below.
+if ! (set -C && : > "$record") 2>/dev/null; then
   echo "A worker named '$name' was started before and not retired: run retire.sh $name first." >&2
+  exit 1
+fi
+reserved=1
+trap '[ -z "$reserved" ] || rm -f "$record"' EXIT
+if claude agents --json 2>/dev/null | jq -e --arg n "$name" 'any(.[]; .name == $n)' >/dev/null; then
+  echo "A live session is already named '$name'; pick another name." >&2
   exit 1
 fi
 
@@ -126,6 +129,7 @@ id=$(claude agents --json 2>/dev/null | jq -r --arg n "$name" 'first(.[] | selec
 [ -n "$id" ] || id=$(printf '%s\n' "$out" | sed -n 's/^backgrounded · \([0-9a-f]*\) · .*/\1/p' | head -n 1)
 jq -nc --arg name "$name" --arg id "$id" --arg dir "$dir" --arg root "$root" --arg base "$base" --arg spawner "$me" \
   --argjson worktree "$worktree" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  '{name: $name, id: $id, dir: $dir, root: $root, base: $base, worktree: $worktree, spawner: $spawner, startedAt: $at}' > "$record"
+  '{name: $name, id: $id, dir: $dir, root: $root, base: $base, worktree: $worktree, spawner: $spawner, startedAt: $at}' >| "$record"
+reserved=""
 printf '%s\n' "$out"
 echo "Started worker '$name' (${id:-id unknown}) in $dir ($mode). It reports to '$me'."

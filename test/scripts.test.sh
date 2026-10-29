@@ -22,7 +22,11 @@ cat > "$work/bin/claude" <<'FAKE'
 #!/usr/bin/env bash
 case $1 in
   agents) cat "$FAKE_AGENTS" ;;
-  --bg) { pwd; printf '%s\n' "$@"; } > "$FAKE_LOG.bg"; echo "backgrounded · a1b2c3d4 · $3" ;;
+  --bg)
+    { pwd; printf '%s\n' "$@"; } > "$FAKE_LOG.bg"
+    if [ -n "${FAKE_BG_FAIL:-}" ]; then echo "could not start" >&2; exit 1; fi
+    echo "backgrounded · a1b2c3d4 · $3"
+    ;;
   stop | rm)
     echo "$*" >> "$FAKE_LOG.life"
     if [ "$1" = stop ] && [ -n "${FAKE_STOP_FAIL:-}" ]; then exit 1; fi
@@ -344,6 +348,19 @@ run "$scripts/spawn.sh" fix-login <<'BRIEF'
 Again.
 BRIEF
 check "a second worker of the same name is refused" [ "$status" -eq 1 ]
+: > "$CLAUDE_CONFIG_DIR/anderton/workers/race-name.json"
+run "$scripts/spawn.sh" race-name <<'BRIEF'
+Task.
+BRIEF
+check "a name another spawn has reserved is refused" [ "$status" -eq 1 ]
+check "and that reservation is left in place" [ -e "$CLAUDE_CONFIG_DIR/anderton/workers/race-name.json" ]
+rm "$CLAUDE_CONFIG_DIR/anderton/workers/race-name.json"
+set +e
+out=$(echo "Task." | env CLAUDE_CODE_SESSION_ID=lead-1 CLAUDE_PID="$p_lead" FAKE_BG_FAIL=1 "$scripts/spawn.sh" fail-start 2>&1)
+status=$?
+set -e
+check "a worker that fails to start releases its name" [ "$status" -eq 1 ] && [ ! -e "$CLAUDE_CONFIG_DIR/anderton/workers/fail-start.json" ]
+check "and its worktree" [ ! -e "$work/wt-fail-start" ]
 echo '[{"kind":"background","name":"busy-name","sessionId":"x","cwd":"/","state":"working"}]' > "$FAKE_AGENTS"
 run "$scripts/spawn.sh" busy-name <<'BRIEF'
 Task.
