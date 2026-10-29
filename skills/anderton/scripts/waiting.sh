@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # List the live Claude Code sessions in the caller's project (every project with --all) that are
 # waiting on a person: their turn ended with Claude talking, or it is blocked on a prompt. The
-# session holding the Anderton role for the caller's project is left out.
+# session holding the Anderton role for the caller's project is left out, and so are the workers
+# spawn.sh started, which report to it.
 # Portable to macOS's bash 3.2 and BSD userland: jq does the date arithmetic, not date -d.
 set -euo pipefail
 # shellcheck source=SCRIPTDIR/session-lib.sh
@@ -103,3 +104,38 @@ EOF
       else empty end' ||
     echo "waiting.sh: could not read $transcript" >&2
 done
+
+# Background sessions have no registry entry; `claude agents --json` reports each with a state. A blocked
+# one waits on a person however long ago it stopped; a done one is listed while its turn is recent.
+command -v claude >/dev/null 2>&1 || exit 0
+claude agents --json 2>/dev/null |
+  jq -r '.[]? | select(.kind == "background" and (.state == "blocked" or .state == "done"))
+    | [.name // "", .sessionId // "", .cwd // "", .state] | join("\u001f")' 2>/dev/null |
+  while IFS=$'\x1f' read -r name sid cwd state; do
+    if [ -z "$sid" ] || [ -f "$holders/workers/$name.json" ]; then continue; fi
+    if [ -z "$all" ] && { [ -z "$cwd" ] || [ "$(project_root "$cwd")" != "$root" ]; }; then
+      continue
+    fi
+    for t in "$home"/projects/*/"$sid".jsonl; do
+      [ -e "$t" ] || continue
+      tail -n 400 "$t" | jq -nrR --arg name "${name:-${sid%%-*}}" --arg cwd "$cwd" --arg state "$state" '
+        [inputs | fromjson? | objects] as $e
+        | ([$e[] | select(.type == "assistant")
+            | [.message.content[]? | objects | select(.type == "text") | .text] | join("\n")
+            | select(. != "")] | last // "") as $said
+        | ([$e[] | .timestamp // empty] | last // "") as $at
+        | (reduce $e[] as $x ({}; reduce ($x.message.content[]? | objects) as $c (.;
+            if $c.type == "tool_use" and $x.type == "assistant" then .[$c.id // "?"] = {name: $c.name, input: $c.input}
+            elif $c.type == "tool_result" then del(.[$c.tool_use_id // "?"])
+            else . end))) as $open
+        | ([$open[] | select(.name == "AskUserQuestion") | .input.questions[]?
+            | "\(.question) [\([.options[]?.label] | join(" / "))]"] | join("\n")) as $ask
+        | ([$open[] | select(.name != "AskUserQuestion") | "\(.name) (pending): \(.input | tojson | .[0:200])"]
+            | join("\n")) as $calls
+        | if $state == "done" and $at < (now - 2 * 86400 | todate) then empty
+          else "=== \($name)  \($cwd)  (background, \($state)\(if $at != "" then " since \($at)" else "" end))\n"
+            + (if $ask != "" then $ask else ([$calls, $said[-900:]] | map(select(. != "")) | join("\n")) end) + "\n"
+          end' || echo "waiting.sh: could not read $t" >&2
+      break
+    done
+  done

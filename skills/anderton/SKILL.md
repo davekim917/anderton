@@ -37,8 +37,8 @@ unless the user says so. A prose rule is not a lock.
    stands: the project's dashboard, if it has one, `ListAgents`, `gh pr list`.
    Sessions often ask the user in their own tab and never tell you, so
    before any "waiting on you" list, run `scripts/waiting.sh` (each live
-   session in this project with an unanswered message or an open prompt; `--all` for
-   every project on this machine) and check
+   session in this project with an unanswered message or an open prompt, background
+   sessions included; `--all` for every project on this machine) and check
    each item against its source (PR state, run list). The user may have answered
    elsewhere. Lead every status report with what is waiting on the user.
 3. **Review.** Judge every change headed for production on three axes: is it the
@@ -77,8 +77,21 @@ worktree. Never remove a worktree you did not create.
 **Work needs doing.** Route it to the session that owns that domain, or start one
 if none does. The brief carries file paths, the data shape you chose and the check
 that defines done, never "figure it out". Write code yourself only for a fix you can
-state in one sentence. `/orchestrate` fits when no session owns the work and it is
-self-contained.
+state in one sentence. `/orchestrate` fits when the work is small and self-contained
+enough for a sub-agent of this session.
+
+**Start a session** with `scripts/spawn.sh <name> <brief-file>` (`--model`, `--effort`,
+`--base <ref>`). It makes a worktree beside the repository (under
+`$ANDERTON_WORKTREES` when set), starts a full background session there in your
+permission mode, and appends to the brief that the worker reports to you by name.
+Then:
+- SendMessage the worker with `notify_when_idle`. The notice fires on every turn end,
+  not only when the task is done, so check the PR or worktree before you believe it,
+  and subscribe again after each notice.
+- The user can open any worker with `claude attach <name>` or from their phone.
+- When its PR is merged or the work is dropped, run `scripts/retire.sh <name>`. It
+  stops the session and removes the worktree, unless the worktree holds work no
+  remote has.
 
 **Before anything is built**, settle the data model, the module boundary and the
 caller's usage. That decision is yours even when the build is not.

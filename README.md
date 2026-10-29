@@ -44,6 +44,22 @@ directory.
   registry says, finds each transcript under `~/.claude/projects/*/<session id>.jsonl`, and leaves
   out the project's holder.
 
+  Background sessions have no registry entry, so it also reads `claude agents --json`. It lists one
+  that is `blocked`, and one that is `done` with a turn in the last two days. It leaves out the
+  workers `spawn.sh` started, which report to the Anderton instead.
+- `scripts/spawn.sh [--model M] [--effort E] [--mode MODE] [--base REF] <name> [brief-file]` starts a
+  worker. It is a full background Claude Code session (`claude --bg -n <name>`), in a new git
+  worktree at `$ANDERTON_WORKTREES/wt-<name>` (default: the folder that holds the repository). The
+  base is `origin/HEAD`, else `origin/main`, `origin/master` or `HEAD`.
+  - It runs in the caller's permission mode, read from the caller's transcript, because a session
+    in another mode holds the caller's messages for its user's approval.
+  - The brief, from the file or stdin, gets a closing rule: report to the caller by name with
+    SendMessage, and don't deploy, restart or message anyone off the machine.
+  - The worker is recorded in `~/.claude/anderton/workers/<name>.json`.
+- `scripts/retire.sh <name>` stops that worker and removes its worktree and record. It exits 3 and
+  keeps the worktree when the worktree has uncommitted changes, or commits since it started that
+  no remote branch has.
+
 The role belongs to a Claude Code process (its pid plus its registry start time), not a session id,
 so it survives `/clear`. Both scripts honour `CLAUDE_CONFIG_DIR`, need `jq`, `git` and a POSIX `ps`,
 and run under macOS's bash 3.2 and BSD userland as well as Linux.
