@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Claim the Anderton role for the calling Claude Code session, in that session's project.
-# Exit 0: claimed (or already held by this session). Exit 3: held by another live session in this project.
+# Claim the Anderton role for the calling Claude Code session, in that session's project, or with
+# --scope <name> the role for one named scope within it, which has its own holder.
+# Exit 0: claimed (or already held by this session). Exit 3: held by another live session, or this
+# session already holds another role in the project.
 # Portable to macOS's bash 3.2 and BSD userland.
 set -euo pipefail
 # shellcheck source=SCRIPTDIR/session-lib.sh
@@ -9,7 +11,19 @@ set -euo pipefail
 require_tools claim.sh
 
 sid="${CLAUDE_CODE_SESSION_ID:?not running inside a Claude Code session}"
-force="${1:-}"
+force="" scope=""
+while [ $# -gt 0 ]; do
+  case $1 in
+    --take-over) force=1 ;;
+    --scope)
+      if [ -z "${2:-}" ]; then echo "usage: claim.sh [--scope <name>] [--take-over]" >&2; exit 2; fi
+      scope=$2
+      shift
+      ;;
+    *) echo "usage: claim.sh [--scope <name>] [--take-over]" >&2; exit 2 ;;
+  esac
+  shift
+done
 
 pid="${CLAUDE_PID:-$(session_pid "$sid")}"
 if [ -z "$pid" ]; then
@@ -17,7 +31,9 @@ if [ -z "$pid" ]; then
   exit 1
 fi
 root=$(invoking_root)
-state=$(holder_path "$root")
+role="Anderton for $root"
+if [ -n "$scope" ]; then role="$role, scope $scope"; fi
+state=$(holder_path "$root" "$scope")
 mkdir -p "$holders"
 lock="$state.lock"
 
@@ -50,23 +66,36 @@ take_lock() {
 take_lock
 
 # The holder is a Claude Code process, not a session id: /clear gives the same process a new one.
-record=$(holder_record "$root")
-if [ -n "$record" ] && [ "$force" != "--take-over" ]; then
+record=$(holder_record "$root" "$scope")
+# One session holding two roles is the one control session doing two jobs again.
+while IFS= read -r other; do
+  if [ -n "$other" ] && [ "$other" != "$state" ] && [ "$other" != "$record" ] &&
+    is_holder "$sessions/$pid.json" "$other"; then
+    held=$(jq -r 'if .scope then "scope \(.scope)" else "the project role" end' "$other" 2>/dev/null || true)
+    echo "This session already holds ${held:-another role} in $root. One session holds one role."
+    exit 3
+  fi
+done <<EOF
+$(project_holders "$root")
+EOF
+
+if [ -n "$record" ] && [ -z "$force" ]; then
   hpid=$(jq -r '.pid // empty' "$record" 2>/dev/null || true)
   if [ -n "$hpid" ] && [ "$hpid" != "$pid" ] && is_holder "$sessions/$hpid.json" "$record"; then
     name=$(jq -r '.name // empty' "$sessions/$hpid.json" 2>/dev/null || true)
     hsid=$(jq -r '.sessionId // empty' "$sessions/$hpid.json" 2>/dev/null || true)
-    echo "Anderton for $root is held by live session '${name:-unknown}' (pid $hpid, session ${hsid:-unknown})."
+    echo "$role is held by live session '${name:-unknown}' (pid $hpid, session ${hsid:-unknown})."
     echo "Rerun with --take-over only if the user says so."
     exit 3
   fi
 fi
 
 started=$(jq -r '.startedAt // empty | floor' "$sessions/$pid.json" 2>/dev/null || true)
-jq -nc --arg root "$root" --argjson pid "$pid" --arg started "$started" --arg sid "$sid" \
+jq -nc --arg root "$root" --arg scope "$scope" --argjson pid "$pid" --arg started "$started" --arg sid "$sid" \
   --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  '{root: $root, pid: $pid, startedAt: ($started | tonumber? // null), sessionId: $sid, claimedAt: $at}' > "$state.tmp"
+  '{root: $root, scope: (if $scope == "" then null else $scope end), pid: $pid,
+    startedAt: ($started | tonumber? // null), sessionId: $sid, claimedAt: $at}' > "$state.tmp"
 mv "$state.tmp" "$state"
 # The machine-wide file now speaks for no project, so nothing reads a stale holder from it.
 if [ "$record" = "$legacy_holder" ]; then mv "$legacy_holder" "$legacy_holder.migrated"; fi
-echo "Anderton for $root claimed by session $sid (pid $pid)."
+echo "$role claimed by session $sid (pid $pid)."
