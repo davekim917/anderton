@@ -92,7 +92,10 @@ if git -C "$root" rev-parse --git-dir >/dev/null 2>&1; then
     done
   fi
   case $base in origin/*) git -C "$root" fetch -q origin 2>/dev/null || echo "spawn.sh: could not fetch origin; starting from the cached $base." >&2 ;; esac
-  dir="${ANDERTON_WORKTREES:-$(dirname "$root")}/wt-$name"
+  parent="${ANDERTON_WORKTREES:-$(dirname "$root")}"
+  mkdir -p "$parent"
+  parent=$(cd "$parent" && pwd -P)
+  dir="$parent/wt-$name"
   if [ -e "$dir" ]; then
     echo "$dir already exists; pick another name." >&2
     exit 1

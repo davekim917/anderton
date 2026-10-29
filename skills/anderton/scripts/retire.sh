@@ -23,8 +23,21 @@ root=$(jq -r .root "$record")
 worktree=$(jq -r .worktree "$record")
 id=$(jq -r '.id // empty' "$record")
 
-if [ -n "$id" ] && command -v claude >/dev/null 2>&1; then
-  claude stop "$id" >/dev/null 2>&1 || true
+# A worker that may still be running keeps its worktree: stop it, or confirm Claude Code no longer lists it.
+if ! command -v claude >/dev/null 2>&1; then
+  echo "retire.sh needs the claude CLI to stop '$name' first." >&2
+  exit 1
+fi
+if [ -z "$id" ]; then
+  echo "The record for '$name' has no session id; stop it by hand (claude agents), then rerun." >&2
+  exit 1
+fi
+if ! claude stop "$id" >/dev/null 2>&1; then
+  if ! listed=$(claude agents --json 2>/dev/null) ||
+    ! printf '%s' "$listed" | jq -e --arg id "$id" 'all(.[]; .id != $id)' >/dev/null 2>&1; then
+    echo "Could not stop '$name' ($id), and it is not confirmed gone; kept its worktree and record." >&2
+    exit 1
+  fi
 fi
 
 if [ "$worktree" = true ] && [ -d "$dir" ]; then
@@ -38,8 +51,9 @@ if [ "$worktree" = true ] && [ -d "$dir" ]; then
   fi
   git -C "$root" worktree remove "$dir"
 fi
-if [ -n "$id" ] && command -v claude >/dev/null 2>&1 && ! claude rm "$id" >/dev/null 2>&1; then
-  echo "retire.sh: claude rm $id failed; remove the session by hand." >&2
+if ! claude rm "$id" >/dev/null 2>&1; then
+  echo "Stopped '$name' and removed its worktree, but claude rm $id failed; kept the record. Rerun to finish." >&2
+  exit 1
 fi
 rm -f "$record"
 echo "Retired '$name'."

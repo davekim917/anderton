@@ -23,7 +23,11 @@ cat > "$work/bin/claude" <<'FAKE'
 case $1 in
   agents) cat "$FAKE_AGENTS" ;;
   --bg) { pwd; printf '%s\n' "$@"; } > "$FAKE_LOG.bg"; echo "backgrounded · a1b2c3d4 · $3" ;;
-  stop | rm) echo "$*" >> "$FAKE_LOG.life" ;;
+  stop | rm)
+    echo "$*" >> "$FAKE_LOG.life"
+    if [ "$1" = stop ] && [ -n "${FAKE_STOP_FAIL:-}" ]; then exit 1; fi
+    if [ "$1" = rm ] && [ -n "${FAKE_RM_FAIL:-}" ]; then exit 1; fi
+    ;;
 esac
 FAKE
 chmod +x "$work/bin/claude"
@@ -329,6 +333,13 @@ check "named, in the caller's permission mode" grep -qx -- "acceptEdits" "$FAKE_
 check "with the brief" grep -qF "Fix the login redirect." "$FAKE_LOG.bg"
 check "telling it to report to the caller by name" grep -qF 'Tell "lead-session" by SendMessage' "$FAKE_LOG.bg"
 check "recording its id, which claude stop and rm take" [ "$(jq -r .id "$CLAUDE_CONFIG_DIR/anderton/workers/fix-login.json")" = a1b2c3d4 ]
+mkdir -p "$work/elsewhere"
+set +e
+out=$(cd "$work/elsewhere" && echo "Task." | env CLAUDE_CODE_SESSION_ID=lead-1 CLAUDE_PID="$p_lead" ANDERTON_WORKTREES=../workers "$scripts/spawn.sh" rel-worker 2>&1)
+status=$?
+set -e
+check "a relative ANDERTON_WORKTREES is resolved from the caller's directory" [ "$status" -eq 0 ] && [ "$(sed -n 1p "$FAKE_LOG.bg")" = "$work/workers/wt-rel-worker" ]
+run "$scripts/retire.sh" rel-worker
 run "$scripts/spawn.sh" fix-login <<'BRIEF'
 Again.
 BRIEF
@@ -366,6 +377,11 @@ check "leaves out a worker spawn.sh started" eval '! contains "=== fix-login"'
 check "leaves out another project's background session" eval '! contains "beta-bg"'
 echo '[]' > "$FAKE_AGENTS"
 
+echo '[{"kind":"background","name":"fix-login","id":"a1b2c3d4","sessionId":"bg-3","cwd":"/","state":"working"}]' > "$FAKE_AGENTS"
+run env FAKE_STOP_FAIL=1 "$scripts/retire.sh" fix-login
+check "retire.sh keeps the worktree of a worker it could not stop" [ "$status" -eq 1 ] && [ -d "$work/wt-fix-login" ]
+check "and its record" [ -f "$CLAUDE_CONFIG_DIR/anderton/workers/fix-login.json" ]
+echo '[]' > "$FAKE_AGENTS"
 echo "work" > "$work/wt-fix-login/notes.txt"
 run "$scripts/retire.sh" fix-login
 check "retire.sh keeps a worktree with uncommitted work" [ "$status" -eq 3 ] && [ -d "$work/wt-fix-login" ]
@@ -376,6 +392,8 @@ git -C "$work/wt-fix-login" -c user.name=t -c user.email=t@example.invalid commi
 run "$scripts/retire.sh" fix-login
 check "it keeps a worktree with commits no remote has" [ "$status" -eq 3 ]
 git -C "$work/wt-fix-login" reset -q --hard HEAD~1
+run env FAKE_RM_FAIL=1 "$scripts/retire.sh" fix-login
+check "a failed claude rm keeps the record, to rerun" [ "$status" -eq 1 ] && [ -f "$CLAUDE_CONFIG_DIR/anderton/workers/fix-login.json" ]
 run "$scripts/retire.sh" fix-login
 check "it retires a clean worker" [ "$status" -eq 0 ]
 check "removing its worktree" [ ! -e "$work/wt-fix-login" ]
