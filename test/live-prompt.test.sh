@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016 # check runs its eval strings later, so they must not expand here
 # Drives prompt.sh against real Claude Code sessions blocked on real prompts, each in a pane of a private tmux server.
 # Not part of CI: it needs a logged-in claude and tmux, and spends a little usage. Run it by hand before changing
 # prompt.sh. PROMPT_SH picks the script under test, so a check can be removed from a copy to see this suite fail.
@@ -130,7 +131,7 @@ lead_reg=$(registry_of live-lead)
 lead_pid=$(jq -r .pid "$lead_reg")
 lead_sid=$(jq -r .sessionId "$lead_reg")
 (cd "$repo" && env CLAUDE_PID="$lead_pid" CLAUDE_CODE_SESSION_ID="$lead_sid" "$scripts/claim.sh" >/dev/null)
-# shellcheck source=../skills/anderton/scripts/session-lib.sh
+# shellcheck source=SCRIPTDIR/../skills/anderton/scripts/session-lib.sh
 holder_record=$(. "$scripts/session-lib.sh"; holder_path "$(project_root "$repo")")
 
 start_session live-a

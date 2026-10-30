@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016 # check runs its eval strings later, so they must not expand here
 # Drives the scripts against a throwaway Claude Code home with sessions in two projects.
 # Runs under macOS's bash 3.2 as well as Linux: bash test/scripts.test.sh
 set -euo pipefail
@@ -992,6 +993,7 @@ prompt() { # prompt [args...]: as the holder; sets $out and $status
 }
 pressed() { cat "$FAKE_LOG.keys" 2>/dev/null || true; }
 fingerprint_of() { printf '%s\n' "$out" | sed -n 's/^Fingerprint: //p'; }
+now_ms="$(date +%s)000"
 spawn
 p_blocked=$pid
 session "$p_blocked" blocked-1 "$watched" blocked-one
@@ -1060,7 +1062,9 @@ refused_session() { # refused_session <description> <message part> [args...]
   local what=$1 part=$2
   shift 2
   prompt "${@:-blocked-one}"
-  check "$what is refused" eval '[ "$status" -eq 3 ] && contains "$part" && [ -z "$(pressed)" ]'
+  check "$what is refused" [ "$status" -eq 3 ]
+  check "  with its reason" contains "$part"
+  check "  and nothing is pressed" [ -z "$(pressed)" ]
 }
 dialog "x"
 refused_session "a session with no live registration" "No live session" nobody
@@ -1074,7 +1078,7 @@ refused_session "a background session" "claude attach"
 jq -c '.kind = "interactive"' "$f" > "$f.tmp"; mv "$f.tmp" "$f"
 spawn
 p_twin=$pid
-session "$p_twin" twin-1 "$watched" blocked-one
+session "$p_twin" twin-1 "$watched" blocked-one "$(date +%s)000"
 refused_session "a name two live sessions share" "More than one"
 rm -f "$CLAUDE_CONFIG_DIR/sessions/$p_twin.json"
 mv "$FAKE_LOG.herdr-agents" "$FAKE_LOG.herdr-agents.keep"
