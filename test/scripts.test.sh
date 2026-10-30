@@ -910,6 +910,16 @@ registry "$p_wb" idle
 (cd "$watched" && env CLAUDE_PID="$p_wh" CLAUDE_CODE_SESSION_ID=wh-2 "$scripts/claim.sh" --take-over >/dev/null)
 unset ANDERTON_WATCH_TICK
 
+# A holder from an earlier version has its record in the machine-wide file and may have no anderton directory.
+export ANDERTON_WATCH_TICK=0.05
+mv "$CLAUDE_CONFIG_DIR/anderton" "$work/anderton.aside"
+jq -c '{pid, startedAt, sessionId}' "$CLAUDE_CONFIG_DIR/sessions/$p_wh.json" > "$CLAUDE_CONFIG_DIR/anderton.json"
+watch_run wh-2
+check "a legacy holder with no anderton directory is still watched" [ "$status" -eq 2 ]
+rm -rf "$CLAUDE_CONFIG_DIR/anderton" "$CLAUDE_CONFIG_DIR/anderton.json"
+mv "$work/anderton.aside" "$CLAUDE_CONFIG_DIR/anderton"
+unset ANDERTON_WATCH_TICK
+
 # A background session Claude Code also registers is one session, not two.
 jq -nc --arg w "$watched" '[{kind: "background", name: "other", sessionId: "wa-1", cwd: $w, state: "blocked"}]' > "$FAKE_AGENTS"
 out=$(cd "$watched" && env CLAUDE_PID="$p_wh" "$scripts/waiting.sh")

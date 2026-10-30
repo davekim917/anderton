@@ -23,8 +23,11 @@ is_holder "$reg" "$record" || exit 0
 
 key=$(basename "$record" .json)
 watcher="$holders/$key.watch"
-reported="$holders/$key.reported"
+# Per holder: an earlier holder's last pass must not record a block this holder has not heard about.
+reported="$holders/$key.$pid.reported"
 tick=${ANDERTON_WATCH_TICK:-30}
+mkdir -p "$holders" 2>/dev/null || exit 0
+[ -w "$holders" ] || exit 0
 take_watch() { (set -C; printf '%s %s\n' "$$" "$pid" > "$watcher") 2>/dev/null; }
 until take_watch; do
   is_holder "$reg" "$record" || exit 0
@@ -40,6 +43,7 @@ until take_watch; do
 done
 trap 'rm -f "$watcher"' EXIT
 
+find "$holders" -maxdepth 1 -name "$key.*.reported" ! -path "$reported" -exec rm -f {} + 2>/dev/null
 : >> "$reported" || exit 0
 export CLAUDE_PID="$pid"
 while is_holder "$reg" "$record"; do
