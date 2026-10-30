@@ -52,7 +52,7 @@ prompt_block() {
         if (index(t, "❯") == 1) cursor = t
       }
       if (cursor !~ /^❯ +1\. +Yes$/) exit
-      for (i = start + 1; i <= end; i++) if (line[i] != "") print line[i]
+      for (i = start + 1; i <= end; i++) print line[i]
     }'
 }
 

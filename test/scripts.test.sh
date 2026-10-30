@@ -1009,6 +1009,14 @@ fp=$(fingerprint_of)
 
 prompt blocked-one
 check "the same prompt reads the same fingerprint" [ "$(fingerprint_of)" = "$fp" ]
+dialog "$(printf 'first line\n\n second line')"
+prompt blocked-one
+keeps_blank_line() { case $out in *" first line"$'\n\n'" second line"*) return 0 ;; *) return 1 ;; esac; }
+check "a blank line inside the command is shown" keeps_blank_line
+with_blank=$(fingerprint_of)
+dialog "$(printf 'first line\n second line')"
+prompt blocked-one
+check "  and two prompts differing only by it read differently" [ "$(fingerprint_of)" != "$with_blank" ]
 dialog "pnpm test --filter web"
 prompt blocked-one yes "$fp"
 check "a prompt whose text changed is refused" eval '[ "$status" -eq 3 ] && contains "changed since it was read"'
