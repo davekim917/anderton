@@ -222,7 +222,17 @@ name, even when the holder is idle. The next `Stop` starts it again. The alert c
 blocked session's text. The hook can't answer a prompt: a background hook can't return a decision.
 While a woken holder is mid-turn no watch runs, so a block in that turn is reported when the turn ends.
 
-All five honour `CLAUDE_CONFIG_DIR` and need `jq`, `git` and a POSIX `ps`.
+**`prompt.sh <name> [yes|no <fingerprint>]`** lets you answer a permission prompt from the Anderton
+session. It reads the prompt from the session's herdr tab or tmux pane and prints it with a
+fingerprint. On your answer it re-reads the screen, refuses unless the prompt is unchanged, presses
+Enter (`yes`, this one call) or Esc (`no`), and confirms from the screen that the prompt closed. It
+refuses a cursor not on a plain "1. Yes", so it can't pick "always allow", and a dialog taller than
+the screen. Only a session holding an Anderton role in the target's project can run it. That your
+word triggers it is an instruction to the Anderton, not something the script can prove, and a
+session running without permission checks can press keys by other means: this prevents mistakes
+and isn't a security boundary. Background sessions have no tab, and `AskUserQuestion` isn't covered.
+
+All six honour `CLAUDE_CONFIG_DIR` and need `jq`, `git` and a POSIX `ps`.
 
 **Tests.** `bash test/structure.test.sh` and `bash test/scripts.test.sh`. The second drives the
 scripts against a throwaway Claude Code home, with fake `claude`, `herdr` and `tmux` commands and
