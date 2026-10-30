@@ -140,9 +140,9 @@ only.
 [firstmate](https://github.com/kunchenguid/firstmate) inspired it. firstmate is a full agent
 distro: it runs from its own directory, supports many harnesses and backends, adds second mates,
 and has a watcher process that notices a stalled crewmate by itself. Anderton is a lighter take for
-people who live in Claude Code: one skill and four shell scripts inside the setup you already have.
-Without a watcher, it relies on workers reporting in, Claude Code's idle notices, and `waiting.sh`
-finding a worker stuck on a prompt the next time you ask for status.
+people who live in Claude Code: one skill and five shell scripts inside the setup you already have.
+It has no separate process to run: workers report in, Claude Code's idle notices cover the ones that
+don't, and a hook wakes the Anderton when a session in the project blocks on a person.
 
 **Can I have more than one?**
 
@@ -153,7 +153,7 @@ session leading a separate stream of work (`claim.sh --scope <name>`). One sessi
 <summary><b>How it works</b></summary>
 
 The skill is [`skills/anderton/SKILL.md`](skills/anderton/SKILL.md); the bar it reviews against is
-[`references/good-code.md`](skills/anderton/references/good-code.md). Four scripts do the
+[`references/good-code.md`](skills/anderton/references/good-code.md). Five scripts do the
 mechanical parts.
 
 **What a project is.** The session's repository, named by its main checkout (or, for a bare
@@ -213,7 +213,16 @@ the worker counts as stopped only when that tab or window is gone and its name h
 worktree when the worktree has uncommitted changes, or commits since it started that no remote
 branch has. Gitignored files don't count as changes.
 
-All four honour `CLAUDE_CONFIG_DIR` and need `jq`, `git` and a POSIX `ps`.
+**`watch.sh`** is the plugin's one hook, a background `Stop` hook. It runs in every session and exits
+at once, in about 50 ms, in any session that isn't its project's holder. In the holder it keeps
+running and checks `waiting.sh --blocked` every 30 seconds, about 0.8 seconds of work on a project of
+a dozen sessions. When another session newly blocks on a permission prompt or `AskUserQuestion`,
+sub-agents included, it exits 2 and Claude Code's `asyncRewake` wakes the holder with the session's
+name, even when the holder is idle. The next `Stop` starts it again. The alert carries none of the
+blocked session's text. The hook can't answer a prompt: a background hook can't return a decision.
+While a woken holder is mid-turn no watch runs, so a block in that turn is reported when the turn ends.
+
+All five honour `CLAUDE_CONFIG_DIR` and need `jq`, `git` and a POSIX `ps`.
 
 **Tests.** `bash test/structure.test.sh` and `bash test/scripts.test.sh`. The second drives the
 scripts against a throwaway Claude Code home, with fake `claude`, `herdr` and `tmux` commands and

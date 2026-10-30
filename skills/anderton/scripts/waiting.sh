@@ -3,7 +3,9 @@
 # waiting on a person: their turn ended with Claude talking, or it is blocked on a prompt. The
 # sessions holding an Anderton role in the caller's project, its own or a scope's, are left out, and
 # so are the workers spawn.sh started, which report to them, unless one is blocked on a prompt: a
-# worker held there cannot send its report.
+# worker held there cannot send its report. With --blocked, for watch.sh, it prints one header line per session
+# blocked on a person, and leaves out only the project's holder. Then come the You Should Know notes not yet
+# reported.
 # Portable to macOS's bash 3.2 and BSD userland: jq does the date arithmetic, not date -d.
 set -euo pipefail
 # shellcheck source=SCRIPTDIR/session-lib.sh
@@ -12,14 +14,18 @@ set -euo pipefail
 require_tools waiting.sh
 
 all=""
-case "${1:-}" in
-  "") ;;
-  --all) all=1 ;;
-  *) echo "usage: waiting.sh [--all]" >&2; exit 2 ;;
-esac
+blocked=""
+for arg in "$@"; do
+  case $arg in
+    --all) all=1 ;;
+    --blocked) blocked=1 ;;
+    *) echo "usage: waiting.sh [--all] [--blocked]" >&2; exit 2 ;;
+  esac
+done
 
+judged=""
 root=$(invoking_root)
-records=$(project_holders "$root")
+if [ -n "$blocked" ]; then records=$(holder_record "$root"); else records=$(project_holders "$root"); fi
 
 for s in "$sessions"/*.json; do
   [ -e "$s" ] || continue
@@ -35,15 +41,18 @@ EOF
 $records
 EOF
   [ -z "$held" ] || continue
+  status=$(jq -r '.status // ""' "$s" 2>/dev/null) || continue
   tag=""
   if is_worker "$name" "$cwd"; then
-    [ "$(jq -r '.status // ""' "$s" 2>/dev/null)" = waiting ] || continue
+    [ "$status" = waiting ] || continue
     tag=" (worker)"
   fi
+  if [ -n "$blocked" ] && [ "$status" != waiting ]; then continue; fi
   if [ -z "$all" ] && { [ -z "$cwd" ] || [ "$(project_root "$cwd")" != "$root" ]; }; then
     continue
   fi
   registered_alive "$pid" "$start" || continue
+  judged="$judged $sid"
 
   transcript=""
   for t in "$home"/projects/*/"$sid".jsonl; do
@@ -69,7 +78,7 @@ EOF
         tail -n 200 "$f"
       done
     fi
-  } | jq -nrR --slurpfile reg "$s" --arg name "${name:-${sid%%-*}}${tag}" --arg cwd "$cwd" '
+  } | jq -nrR --slurpfile reg "$s" --arg name "${name:-${sid%%-*}}${tag}" --arg cwd "$cwd" --arg blocked "$blocked" '
     def blocks: .message.content | if type == "string" then [{type: "text", text: .}] elif type == "array" then . else [] end;
     def human: .type == "user" and (.isMeta | not)
       and (blocks | all(.[]; .type != "tool_result"))
@@ -106,8 +115,9 @@ EOF
         ([$open[] | select(.name == "AskUserQuestion") | .input.questions[]?
           | "\(.question) [\([.options[]?.label] | join(" / "))]"] | join("\n")) as $ask
         | (if $r.statusUpdatedAt then ", since \($r.statusUpdatedAt / 1000 | floor | todate)" else "" end) as $when
-        | "=== \($name)  \($cwd)  (waiting: \($r.waitingFor // "input")\($when))\n"
-          + (if $ask != "" then $ask else ([($open | calls), .said[-900:]] | map(select(. != "")) | join("\n")) end) + "\n"
+        | "=== \($name)  \($cwd)  (waiting: \($r.waitingFor // "input")\($when))"
+          + (if $blocked != "" then "" elif $ask != "" then "\n\($ask)\n"
+             else "\n" + ([($open | calls), .said[-900:]] | map(select(. != "")) | join("\n")) + "\n" end)
       elif $r.status != "busy" and ($stuck | length) > 0 then
         "=== \($name)  \($cwd)  PERMISSION PROMPT? (pending \($stuck[0].pending)s)\n\($stuck | calls)\n"
       elif $r.status != "busy" and .last.type == "assistant" and (.last | said) != ""
@@ -117,7 +127,19 @@ EOF
     echo "waiting.sh: could not read $transcript" >&2
 done
 
-# Background sessions have no registry entry; `claude agents --json` reports each with a state. A blocked
+# The You Should Know plugin's notes it has seen and not marked known. Its store is a private format, so a store
+# of any other shape makes jq fail, and prints nothing.
+you_should_know() {
+  local f notes=""
+  for f in "$home"/plugins/store/cc-plugin-you-should-know_builtin-*.json; do
+    [ -f "$f" ] || continue
+    notes="$notes$(jq -r '(.seen - .known)[] | strings | "- " + gsub("\\s+"; " ")' "$f" 2>/dev/null || true)"
+  done
+  if [ -n "$notes" ]; then printf '=== You Should Know, not yet reported\n%s\n' "$notes"; fi
+}
+[ -n "$blocked" ] || you_should_know
+
+# A background session can have no registry entry; `claude agents --json` reports each with a state. A blocked
 # one waits on a person however long ago it stopped; a done one is listed while its turn is recent.
 command -v claude >/dev/null 2>&1 || exit 0
 claude agents --json 2>/dev/null |
@@ -125,17 +147,19 @@ claude agents --json 2>/dev/null |
     | [.name // "", .sessionId // "", .cwd // "", .state] | join("\u001f")' 2>/dev/null |
   while IFS=$'\x1f' read -r name sid cwd state; do
     [ -n "$sid" ] || continue
+    case "$judged " in *" $sid "*) continue ;; esac
     tag=""
     if is_worker "$name" "$cwd"; then
       [ "$state" = blocked ] || continue
       tag=" (worker)"
     fi
+    if [ -n "$blocked" ] && [ "$state" != blocked ]; then continue; fi
     if [ -z "$all" ] && { [ -z "$cwd" ] || [ "$(project_root "$cwd")" != "$root" ]; }; then
       continue
     fi
     for t in "$home"/projects/*/"$sid".jsonl; do
       [ -e "$t" ] || continue
-      tail -n 400 "$t" | jq -nrR --arg name "${name:-${sid%%-*}}${tag}" --arg cwd "$cwd" --arg state "$state" '
+      tail -n 400 "$t" | jq -nrR --arg name "${name:-${sid%%-*}}${tag}" --arg cwd "$cwd" --arg state "$state" --arg blocked "$blocked" '
         [inputs | fromjson? | objects] as $e
         | ([$e[] | select(.type == "assistant")
             | [.message.content[]? | objects | select(.type == "text") | .text] | join("\n")
@@ -150,8 +174,9 @@ claude agents --json 2>/dev/null |
         | ([$open[] | select(.name != "AskUserQuestion") | "\(.name) (pending): \(.input | tojson | .[0:200])"]
             | join("\n")) as $calls
         | if $state == "done" and $at < (now - 2 * 86400 | todate) then empty
-          else "=== \($name)  \($cwd)  (background, \($state)\(if $at != "" then " since \($at)" else "" end))\n"
-            + (if $ask != "" then $ask else ([$calls, $said[-900:]] | map(select(. != "")) | join("\n")) end) + "\n"
+          else "=== \($name)  \($cwd)  (background, \($state)\(if $at != "" then " since \($at)" else "" end))"
+            + (if $blocked != "" then "" elif $ask != "" then "\n\($ask)\n"
+               else "\n" + ([$calls, $said[-900:]] | map(select(. != "")) | join("\n")) + "\n" end)
           end' || echo "waiting.sh: could not read $t" >&2
       break
     done
