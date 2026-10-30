@@ -166,16 +166,12 @@ case "$mux $answer" in
   "tmux no") tmux send-keys -t "$pane" Escape ;;
 esac || refuse "The key press failed."
 
-# The screen, not the press, says whether the prompt closed. A different prompt in its place also means this one did;
-# a dialog this can no longer read proves nothing.
+# The screen, not the press, says whether the prompt closed: no dialog is left, or the registry dates a new one. The
+# same dialog can redraw with other line breaks, or stop parsing, so its text proves nothing either way.
 for _ in 1 2 3 4; do
   sleep 1
   screen=$(read_screen 2>/dev/null) || break
-  text=$(printf '%s\n' "$screen" | prompt_block)
-  since=$(jq -r '.statusUpdatedAt // empty' "$reg" 2>/dev/null) || since=""
-  if [ -n "$text" ]; then
-    [ "$(fingerprint)" != "$print" ] || continue
-  elif printf '%s\n' "$screen" | dialog_showing; then
+  if printf '%s\n' "$screen" | dialog_showing && [ "$(jq -r '.statusUpdatedAt // empty' "$reg" 2>/dev/null)" = "$since" ]; then
     continue
   fi
   echo "Answered $answer: $name's prompt has closed."

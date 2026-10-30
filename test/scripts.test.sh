@@ -79,6 +79,11 @@ case "$1 $2" in
     if [ -n "${FAKE_KEY_MOVES_CURSOR:-}" ]; then
       sed -i.bak -e 's/^ ❯ 1\. Yes$/   1. Yes/' -e 's/^   3\. No$/ ❯ 3. No/' "$FAKE_SCREEN"
     fi
+    if [ -n "${FAKE_KEY_REDRAWS:-}" ]; then sed -i.bak 's/--filter api/--filter\n   api/' "$FAKE_SCREEN"; fi
+    if [ -n "${FAKE_KEY_NEXT_STATUS:-}" ]; then
+      jq -c '.statusUpdatedAt += 1' "$FAKE_KEY_NEXT_STATUS" > "$FAKE_KEY_NEXT_STATUS.tmp"
+      mv "$FAKE_KEY_NEXT_STATUS.tmp" "$FAKE_KEY_NEXT_STATUS"
+    fi
     ;;
   "tab get")
     if [ -n "${FAKE_HERDR_GET_GARBAGE:-}" ]; then echo "permission denied" >&2; exit 1; fi
@@ -1059,6 +1064,16 @@ dialog "pnpm test --filter api"
 FAKE_KEY_MOVES_CURSOR=1 prompt blocked-one yes "$fp"
 check "a dialog still open but no longer answerable after the press exits 4" eval '[ "$status" -eq 4 ] && [ "$(pressed)" = "w9:p7 enter" ]'
 rm -f "$FAKE_LOG.keys"
+
+dialog "pnpm test --filter api"
+FAKE_KEY_REDRAWS=1 prompt blocked-one yes "$fp"
+check "the same dialog redrawn after the press exits 4" eval '[ "$status" -eq 4 ] && [ "$(pressed)" = "w9:p7 enter" ]'
+rm -f "$FAKE_LOG.keys"
+dialog "pnpm test --filter api"
+FAKE_KEY_REDRAWS=1 FAKE_KEY_NEXT_STATUS="$f" prompt blocked-one yes "$fp"
+check "a new prompt after the press means the old one closed" eval '[ "$status" -eq 0 ] && contains "Answered yes"'
+rm -f "$FAKE_LOG.keys"
+jq -c '.statusUpdatedAt -= 1' "$f" > "$f.tmp"; mv "$f.tmp" "$f"
 
 refused_screen() { # refused_screen <description>: the screen as written must be refused, with nothing pressed
   prompt blocked-one
