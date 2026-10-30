@@ -24,13 +24,20 @@ is_holder "$reg" "$record" || exit 0
 key=$(basename "$record" .json)
 watcher="$holders/$key.watch"
 reported="$holders/$key.reported"
-take_watch() { (set -C; printf '%s\n' "$$" > "$watcher") 2>/dev/null; }
-if ! take_watch; then
-  other=$(cat "$watcher" 2>/dev/null)
-  case $(ps -o command= -p "${other:-0}" 2>/dev/null) in *watch.sh*) exit 0 ;; esac
-  rm -f "$watcher"
-  take_watch || exit 0
-fi
+tick=${ANDERTON_WATCH_TICK:-30}
+take_watch() { (set -C; printf '%s %s\n' "$$" "$pid" > "$watcher") 2>/dev/null; }
+until take_watch; do
+  is_holder "$reg" "$record" || exit 0
+  read -r other owner < "$watcher" 2>/dev/null
+  case $(ps -o command= -p "${other:-0}" 2>/dev/null) in
+    *watch.sh*)
+      # A watch for this holder keeps the job. An earlier holder's leaves within a tick of losing the role.
+      [ "$owner" != "$pid" ] || exit 0
+      sleep "$tick"
+      ;;
+    *) rm -f "$watcher" ;;
+  esac
+done
 trap 'rm -f "$watcher"' EXIT
 
 : >> "$reported" || exit 0
@@ -48,6 +55,6 @@ while is_holder "$reg" "$record"; do
     } >&2
     exit 2
   fi
-  sleep "${ANDERTON_WATCH_TICK:-30}"
+  sleep "$tick"
 done
 exit 0

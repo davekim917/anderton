@@ -895,6 +895,19 @@ mv "$holder_file" "$holder_file.gone"
 set +e; wait "$watcher_pid"; status=$?; set -e
 check "the watch ends with no output once the session stops holding the role" [ "$status" -eq 0 ] && [ ! -s "$work/watch.out" ]
 mv "$holder_file.gone" "$holder_file"
+
+# A take-over during the old holder's watch: the new holder's watch outlasts it rather than leaving to it.
+export ANDERTON_WATCH_TICK=2
+watch_start wh-2
+export ANDERTON_WATCH_TICK=0.05
+(cd "$watched" && env CLAUDE_PID="$p_wa" CLAUDE_CODE_SESSION_ID=wa-1 "$scripts/claim.sh" --take-over >/dev/null)
+now_ms=$((now_ms + 1000))
+registry "$p_wb" waiting "permission prompt"
+watch_run wa-1
+check "a new holder's watch replaces the old holder's" [ "$status" -eq 2 ]
+check "and reports to the new holder" contains "=== scope-lead"
+registry "$p_wb" idle
+(cd "$watched" && env CLAUDE_PID="$p_wh" CLAUDE_CODE_SESSION_ID=wh-2 "$scripts/claim.sh" --take-over >/dev/null)
 unset ANDERTON_WATCH_TICK
 
 # A background session Claude Code also registers is one session, not two.
