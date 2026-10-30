@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016 # check runs its eval strings later, so they must not expand here
 # Drives the scripts against a throwaway Claude Code home with sessions in two projects.
 # Runs under macOS's bash 3.2 as well as Linux: bash test/scripts.test.sh
 set -euo pipefail
@@ -62,7 +63,28 @@ case "$1 $2" in
     if [ -n "${FAKE_HERDR_START_FAIL:-}" ]; then echo '{"error":{"code":"agent_not_ready"}}'; exit 1; fi
     ;;
   "agent prompt") printf '%s' "$4" > "$FAKE_LOG.prompt" ;;
-  "agent read") echo "Quick safety check: Is this a project you trust?" ;;
+  "agent list") cat "$FAKE_LOG.herdr-agents" 2>/dev/null || echo '{"result":{"agents":[]}}' ;;
+  "agent read")
+    if [ -n "${FAKE_SCREEN:-}" ]; then
+      if [ -e "$FAKE_LOG.read-broken" ]; then exit 1; fi
+      cat "$FAKE_SCREEN"
+    else
+      echo "Quick safety check: Is this a project you trust?"
+    fi
+    ;;
+  "agent send-keys")
+    echo "$3 $4" >> "$FAKE_LOG.keys"
+    if [ -n "${FAKE_KEY_CLOSES:-}" ]; then : > "$FAKE_SCREEN"; fi
+    if [ -n "${FAKE_KEY_BREAKS_READ:-}" ]; then : > "$FAKE_LOG.read-broken"; fi
+    if [ -n "${FAKE_KEY_MOVES_CURSOR:-}" ]; then
+      sed -i.bak -e 's/^ ❯ 1\. Yes$/   1. Yes/' -e 's/^   3\. No$/ ❯ 3. No/' "$FAKE_SCREEN"
+    fi
+    if [ -n "${FAKE_KEY_REDRAWS:-}" ]; then sed -i.bak 's/--filter api/--filter\n   api/' "$FAKE_SCREEN"; fi
+    if [ -n "${FAKE_KEY_NEXT_STATUS:-}" ]; then
+      jq -c '.statusUpdatedAt += 1' "$FAKE_KEY_NEXT_STATUS" > "$FAKE_KEY_NEXT_STATUS.tmp"
+      mv "$FAKE_KEY_NEXT_STATUS.tmp" "$FAKE_KEY_NEXT_STATUS"
+    fi
+    ;;
   "tab get")
     if [ -n "${FAKE_HERDR_GET_GARBAGE:-}" ]; then echo "permission denied" >&2; exit 1; fi
     if [ -n "${FAKE_HERDR_NO_SERVER:-}" ]; then echo '{"error":{"code":"server_not_running"}}'; exit 1; fi
@@ -110,6 +132,12 @@ case $1 in
     if [ -n "${FAKE_TMUX_NO_SOCKET:-}" ]; then echo "error connecting to $sock (No such file or directory)" >&2; exit 1; fi
     if [ -n "${FAKE_TMUX_GARBAGE:-}" ]; then echo "error connecting to $sock (Permission denied)" >&2; exit 1; fi
     awk -v s="$sock" '$1 == s { print $2, $3, $4 }' "$FAKE_LOG.windows-open" 2>/dev/null || true
+    ;;
+  list-panes) cat "$FAKE_LOG.tmux-panes" 2>/dev/null ;;
+  capture-pane) cat "$FAKE_SCREEN" ;;
+  send-keys)
+    echo "$3 $4" >> "$FAKE_LOG.keys"
+    if [ -n "${FAKE_KEY_CLOSES:-}" ]; then : > "$FAKE_SCREEN"; fi
     ;;
   kill-window)
     echo "$sock $3" >> "$FAKE_LOG.killed"
@@ -949,6 +977,181 @@ done
 rm -f "$ysk"
 out=$(waiting)
 check "no store prints no notes" eval '! contains "You Should Know"'
+
+# prompt.sh: the holder reads a blocked session's prompt and answers it on the user's word.
+screen="$work/screen"
+dialog() { # dialog <command line> [cursor line]: writes a screen ending in a permission dialog, in Claude Code's shape
+  local cursor=${2:-" ❯ 1. Yes"} rule="──────────────────────────────"
+  {
+    printf 'Earlier output\n%s\n Bash command\n Run the tests\n %s\n\n Do you want to proceed?\n' "$rule" "$1"
+    printf '%s\n' "$cursor"
+    if [ "$cursor" = " ❯ 1. Yes" ]; then
+      printf "   2. Yes, and don't ask again for: run commands in /repo\n   3. No\n"
+    else
+      printf "   3. No\n"
+    fi
+    printf '\n Esc to cancel · Tab to amend\n%s blocked-one ──\n' "$rule"
+  } > "$screen"
+}
+prompt() { # prompt [args...]: as the holder; sets $out and $status
+  set +e
+  out=$(cd "$watched" && env CLAUDE_PID="$p_wh" CLAUDE_CODE_SESSION_ID=wh-1 FAKE_SCREEN="$screen" "$scripts/prompt.sh" "$@" 2>&1)
+  status=$?
+  set -e
+}
+pressed() { cat "$FAKE_LOG.keys" 2>/dev/null || true; }
+fingerprint_of() { printf '%s\n' "$out" | sed -n 's/^Fingerprint: //p'; }
+now_ms="$(date +%s)000"
+spawn
+p_blocked=$pid
+session "$p_blocked" blocked-1 "$watched" blocked-one
+registry "$p_blocked" waiting "permission prompt"
+echo '{"result":{"agents":[{"pane_id":"w9:p7","agent_session":{"value":"blocked-1"}},{"pane_id":"w9:p8","agent_session":{"value":"wa-1"}}]}}' > "$FAKE_LOG.herdr-agents"
+
+dialog "pnpm test --filter api"
+prompt blocked-one
+check "prompt.sh prints the session and the prompt's exact text" eval '[ "$status" -eq 0 ] && contains "Session: blocked-one" && contains " pnpm test --filter api" && contains "Do you want to proceed?"'
+check "  and a fingerprint" [ -n "$(fingerprint_of)" ]
+check "  and reading presses nothing" [ -z "$(pressed)" ]
+fp=$(fingerprint_of)
+
+prompt blocked-one
+check "the same prompt reads the same fingerprint" [ "$(fingerprint_of)" = "$fp" ]
+dialog "$(printf 'first line\n\n second line')"
+prompt blocked-one
+keeps_blank_line() { case $out in *" first line"$'\n\n'" second line"*) return 0 ;; *) return 1 ;; esac; }
+check "a blank line inside the command is shown" keeps_blank_line
+with_blank=$(fingerprint_of)
+dialog "$(printf 'first line\n second line')"
+prompt blocked-one
+check "  and two prompts differing only by it read differently" [ "$(fingerprint_of)" != "$with_blank" ]
+dialog "$(printf 'first line   \n second line')"
+prompt blocked-one
+with_spaces=$(fingerprint_of)
+dialog "$(printf 'first line\n second line')"
+prompt blocked-one
+check "two prompts differing only by trailing spaces read differently" [ "$(fingerprint_of)" != "$with_spaces" ]
+dialog "pnpm test --filter web"
+prompt blocked-one yes "$fp"
+check "a prompt whose text changed is refused" eval '[ "$status" -eq 3 ] && contains "changed since it was read"'
+check "  and nothing is pressed" [ -z "$(pressed)" ]
+dialog "pnpm test --filter api"
+f="$CLAUDE_CONFIG_DIR/sessions/$p_blocked.json"
+jq -c '.statusUpdatedAt += 1' "$f" > "$f.tmp"
+mv "$f.tmp" "$f"
+prompt blocked-one yes "$fp"
+check "a later prompt with the same text is refused" eval '[ "$status" -eq 3 ] && contains "changed since it was read" && [ -z "$(pressed)" ]'
+prompt blocked-one
+fp=$(fingerprint_of)
+
+FAKE_KEY_CLOSES=1 prompt blocked-one yes "$fp"
+check "yes presses Enter in that session's pane" eval '[ "$status" -eq 0 ] && [ "$(pressed)" = "w9:p7 enter" ]'
+check "  and reports the prompt closed" contains "Answered yes"
+rm -f "$FAKE_LOG.keys"
+dialog "pnpm test --filter api"
+FAKE_KEY_CLOSES=1 prompt blocked-one no "$fp"
+check "no presses Esc" eval '[ "$status" -eq 0 ] && [ "$(pressed)" = "w9:p7 esc" ]'
+rm -f "$FAKE_LOG.keys"
+dialog "pnpm test --filter api"
+prompt blocked-one yes "$fp"
+check "a prompt still open after the press exits 4" eval '[ "$status" -eq 4 ] && contains "does not show" && [ "$(pressed)" = "w9:p7 enter" ]'
+rm -f "$FAKE_LOG.keys"
+FAKE_KEY_BREAKS_READ=1 prompt blocked-one yes "$fp"
+check "a screen unreadable after the press exits 4" [ "$status" -eq 4 ]
+rm -f "$FAKE_LOG.keys" "$FAKE_LOG.read-broken"
+
+dialog "pnpm test --filter api"
+FAKE_KEY_MOVES_CURSOR=1 prompt blocked-one yes "$fp"
+check "a dialog still open but no longer answerable after the press exits 4" eval '[ "$status" -eq 4 ] && [ "$(pressed)" = "w9:p7 enter" ]'
+rm -f "$FAKE_LOG.keys"
+
+dialog "pnpm test --filter api"
+FAKE_KEY_REDRAWS=1 prompt blocked-one yes "$fp"
+check "the same dialog redrawn after the press exits 4" eval '[ "$status" -eq 4 ] && [ "$(pressed)" = "w9:p7 enter" ]'
+rm -f "$FAKE_LOG.keys"
+dialog "pnpm test --filter api"
+FAKE_KEY_REDRAWS=1 FAKE_KEY_NEXT_STATUS="$f" prompt blocked-one yes "$fp"
+check "a new prompt after the press means the old one closed" eval '[ "$status" -eq 0 ] && contains "Answered yes"'
+rm -f "$FAKE_LOG.keys"
+jq -c '.statusUpdatedAt -= 1' "$f" > "$f.tmp"; mv "$f.tmp" "$f"
+
+refused_screen() { # refused_screen <description>: the screen as written must be refused, with nothing pressed
+  prompt blocked-one
+  check "$1 is refused" eval '[ "$status" -eq 3 ] && contains "open its tab" && [ -z "$(pressed)" ]'
+}
+dialog "x" "   1. Yes"; sed -i.bak 's/^   3. No$/ ❯ 2. Yes, and always allow access\n   3. No/' "$screen"
+refused_screen "a cursor on the always-allow option"
+dialog "x" " ❯ 1. Yes, and don't ask again for: x commands"
+refused_screen "a dialog whose only yes widens permissions"
+dialog "❯ 1. Yes" "   1. Yes"; sed -i.bak 's/^   3. No$/ ❯ 3. No/' "$screen"
+refused_screen "a cursor line in the command while the real cursor is on No"
+dialog "x"; sed -i.bak '/^─/d' "$screen"
+refused_screen "a dialog whose top rule is off the screen"
+dialog "x"; printf 'The session moved on\n' >> "$screen"
+refused_screen "an answered dialog in the scrollback"
+printf 'nothing like a dialog\n' > "$screen"
+refused_screen "a screen with no dialog"
+dialog "x"; touch "$FAKE_LOG.read-broken"
+refused_screen "a screen that can't be read"
+rm -f "$FAKE_LOG.read-broken"
+
+refused_session() { # refused_session <description> <message part> [args...]
+  local what=$1 part=$2
+  shift 2
+  prompt "${@:-blocked-one}"
+  check "$what is refused" [ "$status" -eq 3 ]
+  check "  with its reason" contains "$part"
+  check "  and nothing is pressed" [ -z "$(pressed)" ]
+}
+dialog "x"
+refused_session "a session with no live registration" "No live session" nobody
+registry "$p_blocked" idle
+refused_session "a session that isn't blocked" "not blocked"
+registry "$p_blocked" waiting "input needed"
+refused_session "an AskUserQuestion" "not blocked"
+registry "$p_blocked" waiting "permission prompt"
+jq -c '.kind = "bg"' "$f" > "$f.tmp"; mv "$f.tmp" "$f"
+refused_session "a background session" "claude attach"
+jq -c '.kind = "interactive"' "$f" > "$f.tmp"; mv "$f.tmp" "$f"
+spawn
+p_twin=$pid
+session "$p_twin" twin-1 "$watched" blocked-one "$(date +%s)000"
+refused_session "a name two live sessions share" "More than one"
+rm -f "$CLAUDE_CONFIG_DIR/sessions/$p_twin.json"
+mv "$FAKE_LOG.herdr-agents" "$FAKE_LOG.herdr-agents.keep"
+refused_session "a session in no tab or pane" "not in a herdr tab or tmux pane"
+mv "$FAKE_LOG.herdr-agents.keep" "$FAKE_LOG.herdr-agents"
+session "$p_blocked" blocked-1 "$beta" blocked-one
+registry "$p_blocked" waiting "permission prompt"
+refused_session "a session in another project" "another project"
+session "$p_blocked" blocked-1 "$watched" blocked-one
+registry "$p_blocked" waiting "permission prompt"
+
+set +e
+out=$(cd "$watched" && env CLAUDE_PID="$p_wa" CLAUDE_CODE_SESSION_ID=wa-1 FAKE_SCREEN="$screen" "$scripts/prompt.sh" blocked-one 2>&1)
+status=$?
+set -e
+check "a session holding no role is refused" eval '[ "$status" -eq 3 ] && contains "Anderton role"'
+set +e
+out=$(cd "$watched" && env CLAUDE_PID="$p_wb" CLAUDE_CODE_SESSION_ID=wb-1 FAKE_SCREEN="$screen" "$scripts/prompt.sh" blocked-one 2>&1)
+status=$?
+set -e
+check "a scope holder in the project may read a prompt" [ "$status" -eq 0 ]
+
+prompt blocked-one yes
+check "yes without a fingerprint is a usage error" [ "$status" -eq 2 ]
+prompt blocked-one maybe "$fp"
+check "an answer other than yes or no is a usage error" [ "$status" -eq 2 ]
+
+rm -f "$FAKE_LOG.herdr-agents"
+printf '1 %%9\n%s %%3\n' "$(ps -o ppid= -p "$p_blocked" | tr -d ' ')" > "$FAKE_LOG.tmux-panes"
+dialog "pnpm test --filter api"
+prompt blocked-one
+fp=$(fingerprint_of)
+check "tmux: the pane is the one the session's process descends from" eval '[ "$status" -eq 0 ] && contains " pnpm test --filter api"'
+FAKE_KEY_CLOSES=1 prompt blocked-one yes "$fp"
+check "tmux: yes presses Enter in that pane" eval '[ "$status" -eq 0 ] && [ "$(pressed)" = "%3 Enter" ]'
+rm -f "$FAKE_LOG.keys" "$FAKE_LOG.tmux-panes" "$screen.bak"
 
 [ "$failures" -eq 0 ] || { echo "$failures check(s) failed"; exit 1; }
 echo "all checks passed"
