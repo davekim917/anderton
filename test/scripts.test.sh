@@ -76,6 +76,9 @@ case "$1 $2" in
     echo "$3 $4" >> "$FAKE_LOG.keys"
     if [ -n "${FAKE_KEY_CLOSES:-}" ]; then : > "$FAKE_SCREEN"; fi
     if [ -n "${FAKE_KEY_BREAKS_READ:-}" ]; then : > "$FAKE_LOG.read-broken"; fi
+    if [ -n "${FAKE_KEY_MOVES_CURSOR:-}" ]; then
+      sed -i.bak -e 's/^ ❯ 1\. Yes$/   1. Yes/' -e 's/^   3\. No$/ ❯ 3. No/' "$FAKE_SCREEN"
+    fi
     ;;
   "tab get")
     if [ -n "${FAKE_HERDR_GET_GARBAGE:-}" ]; then echo "permission denied" >&2; exit 1; fi
@@ -1017,6 +1020,12 @@ with_blank=$(fingerprint_of)
 dialog "$(printf 'first line\n second line')"
 prompt blocked-one
 check "  and two prompts differing only by it read differently" [ "$(fingerprint_of)" != "$with_blank" ]
+dialog "$(printf 'first line   \n second line')"
+prompt blocked-one
+with_spaces=$(fingerprint_of)
+dialog "$(printf 'first line\n second line')"
+prompt blocked-one
+check "two prompts differing only by trailing spaces read differently" [ "$(fingerprint_of)" != "$with_spaces" ]
 dialog "pnpm test --filter web"
 prompt blocked-one yes "$fp"
 check "a prompt whose text changed is refused" eval '[ "$status" -eq 3 ] && contains "changed since it was read"'
@@ -1045,6 +1054,11 @@ rm -f "$FAKE_LOG.keys"
 FAKE_KEY_BREAKS_READ=1 prompt blocked-one yes "$fp"
 check "a screen unreadable after the press exits 4" [ "$status" -eq 4 ]
 rm -f "$FAKE_LOG.keys" "$FAKE_LOG.read-broken"
+
+dialog "pnpm test --filter api"
+FAKE_KEY_MOVES_CURSOR=1 prompt blocked-one yes "$fp"
+check "a dialog still open but no longer answerable after the press exits 4" eval '[ "$status" -eq 4 ] && [ "$(pressed)" = "w9:p7 enter" ]'
+rm -f "$FAKE_LOG.keys"
 
 refused_screen() { # refused_screen <description>: the screen as written must be refused, with nothing pressed
   prompt blocked-one

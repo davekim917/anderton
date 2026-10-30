@@ -230,7 +230,8 @@ refuses a cursor not on a plain "1. Yes", so it can't pick "always allow", and a
 the screen. Only a session holding an Anderton role in the target's project can run it. That your
 word triggers it is an instruction to the Anderton, not something the script can prove, and a
 session running without permission checks can press keys by other means: this prevents mistakes
-and isn't a security boundary. Background sessions have no tab, and `AskUserQuestion` isn't covered.
+and isn't a security boundary. It sees what the terminal draws, so what a terminal doesn't draw, such
+as a control character, it can't show you either. Background sessions have no tab, and `AskUserQuestion` isn't covered.
 
 All six honour `CLAUDE_CONFIG_DIR` and need `jq`, `git` and a POSIX `ps`.
 

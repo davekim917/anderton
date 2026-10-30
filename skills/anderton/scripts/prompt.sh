@@ -37,7 +37,7 @@ refuse() {
 # indented, so a rule a model writes into a command cannot pass for its edge.
 prompt_block() {
   LC_ALL=C awk -v rule="──────────" '
-    { sub(/[ \t\r]+$/, ""); line[NR] = $0 }
+    { raw[NR] = $0; sub(/[ \t\r]+$/, ""); line[NR] = $0 }
     END {
       end = NR
       while (end > 0 && (line[end] == "" || index(line[end], rule) == 1)) end--
@@ -52,14 +52,21 @@ prompt_block() {
         if (index(t, "❯") == 1) cursor = t
       }
       if (cursor !~ /^❯ +1\. +Yes$/) exit
-      for (i = start + 1; i <= end; i++) print line[i]
+      for (i = start + 1; i <= end; i++) print raw[i]
     }'
+}
+
+# True when the screen on stdin ends in a dialog of any kind, answerable or not.
+dialog_showing() {
+  LC_ALL=C awk -v rule="──────────" '
+    { sub(/[ \t\r]+$/, ""); if ($0 != "" && index($0, rule) != 1) last = $0 }
+    END { exit !(last ~ /^ *Esc to cancel/) }'
 }
 
 read_screen() {
   case $mux in
     herdr) herdr agent read "$pane" --source visible --format text ;;
-    tmux) tmux capture-pane -p -t "$pane" ;;
+    tmux) tmux capture-pane -p -N -t "$pane" ;;
   esac
 }
 
@@ -159,16 +166,20 @@ case "$mux $answer" in
   "tmux no") tmux send-keys -t "$pane" Escape ;;
 esac || refuse "The key press failed."
 
-# The screen, not the press, says whether the prompt closed. A different prompt in its place also means this one did.
+# The screen, not the press, says whether the prompt closed. A different prompt in its place also means this one did;
+# a dialog this can no longer read proves nothing.
 for _ in 1 2 3 4; do
   sleep 1
   screen=$(read_screen 2>/dev/null) || break
   text=$(printf '%s\n' "$screen" | prompt_block)
   since=$(jq -r '.statusUpdatedAt // empty' "$reg" 2>/dev/null) || since=""
-  if [ -z "$text" ] || [ "$(fingerprint)" != "$print" ]; then
-    echo "Answered $answer: $name's prompt has closed."
-    exit 0
+  if [ -n "$text" ]; then
+    [ "$(fingerprint)" != "$print" ] || continue
+  elif printf '%s\n' "$screen" | dialog_showing; then
+    continue
   fi
+  echo "Answered $answer: $name's prompt has closed."
+  exit 0
 done
 echo "prompt.sh: The key was pressed, but the screen does not show $name's prompt closing. Open its tab." >&2
 exit 4
