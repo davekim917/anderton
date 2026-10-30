@@ -860,6 +860,8 @@ registry "$p_wb" waiting "permission prompt"
 watch_run wh-1
 check "the project's holder hears about a blocked scope holder" contains "=== scope-lead"
 check "and not a session it already heard about" eval '! contains "=== other "'
+out=$(cd "$watched" && env CLAUDE_PID="$p_wh" "$scripts/waiting.sh")
+check "plain waiting.sh shows what a blocked scope holder is asking" contains "=== scope-lead"
 out=$(cd "$watched" && env CLAUDE_PID="$p_wa" "$scripts/waiting.sh" --blocked)
 check "--blocked never lists the project's holder" eval '! contains "=== holder "'
 registry "$p_wb" idle

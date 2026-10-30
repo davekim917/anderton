@@ -3,9 +3,9 @@
 # waiting on a person: their turn ended with Claude talking, or it is blocked on a prompt. The
 # sessions holding an Anderton role in the caller's project, its own or a scope's, are left out, and
 # so are the workers spawn.sh started, which report to them, unless one is blocked on a prompt: a
-# worker held there cannot send its report. With --blocked, for watch.sh, it prints one header line per session
-# blocked on a person, and leaves out only the project's holder. Then come the You Should Know notes not yet
-# reported.
+# session held there cannot send a report. Only the project's holder always stays out. With --blocked,
+# for watch.sh, it prints one header line per session blocked on a person. Then come the You Should Know
+# notes not yet reported.
 # Portable to macOS's bash 3.2 and BSD userland: jq does the date arithmetic, not date -d.
 set -euo pipefail
 # shellcheck source=SCRIPTDIR/session-lib.sh
@@ -25,7 +25,8 @@ done
 
 judged=""
 root=$(invoking_root)
-if [ -n "$blocked" ]; then records=$(holder_record "$root"); else records=$(project_holders "$root"); fi
+project=$(holder_record "$root")
+records=$(project_holders "$root")
 
 for s in "$sessions"/*.json; do
   [ -e "$s" ] || continue
@@ -34,14 +35,14 @@ for s in "$sessions"/*.json; do
 $fields
 EOF
   if [ -z "$pid" ] || [ -z "$sid" ]; then continue; fi
+  status=$(jq -r '.status // ""' "$s" 2>/dev/null) || continue
   held=""
   while IFS= read -r r; do
-    if [ -n "$r" ] && is_holder "$s" "$r"; then held=1; fi
+    if [ -n "$r" ] && is_holder "$s" "$r"; then held=$r; fi
   done <<EOF
 $records
 EOF
-  [ -z "$held" ] || continue
-  status=$(jq -r '.status // ""' "$s" 2>/dev/null) || continue
+  if [ -n "$held" ] && { [ "$status" != waiting ] || [ "$held" = "$project" ]; }; then continue; fi
   tag=""
   if is_worker "$name" "$cwd"; then
     [ "$status" = waiting ] || continue
