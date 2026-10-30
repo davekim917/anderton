@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The plugin's shape: Claude Code only, invoke-only, nothing that activates on its own.
+# The plugin's shape: Claude Code only, invoke-only, and one hook, which only ever reports.
 # Runs under macOS's bash 3.2 as well as Linux: bash test/structure.test.sh
 set -euo pipefail
 
@@ -23,9 +23,18 @@ manifest="$root/.claude-plugin/plugin.json"
 [ "$(jq -r 'has("version")' "$manifest")" = false ] || fail "plugin.json must not pin a version"
 
 # The scripts read Claude Code's own session registry, so a Codex manifest would install a skill that cannot work.
-for path in .codex-plugin hooks always-on.md; do
+for path in .codex-plugin always-on.md; do
   [ ! -e "$root/$path" ] || fail "$path must not exist"
 done
+
+# A background hook cannot return a decision, so the plugin can never answer a permission prompt.
+hooks="$root/hooks/hooks.json"
+[ "$(jq -c '.hooks | keys' "$hooks")" = '["Stop"]' ] || fail "hooks.json must hook only Stop"
+[ "$(jq '[.hooks[][].hooks[]] | length' "$hooks")" = 1 ] || fail "hooks.json must have one handler"
+jq -e '.hooks.Stop[0].hooks[0] | .type == "command" and .asyncRewake == true and (.command | endswith("/skills/anderton/scripts/watch.sh\""))' "$hooks" >/dev/null ||
+  fail "the Stop hook must run watch.sh in the background with asyncRewake"
+# Claude Code enforces timeout on asyncRewake, and its default of 600 seconds would end an idle holder's watch.
+[ "$(jq '.hooks.Stop[0].hooks[0].timeout' "$hooks")" -ge 86400 ] || fail "the Stop hook's timeout must outlast an idle day"
 
 awk 'NR == 1 { if ($0 != "---") exit; next }
   $0 == "---" { closed = 1; exit }
@@ -33,7 +42,7 @@ awk 'NR == 1 { if ($0 != "---") exit; next }
   END { exit (closed && found) ? 0 : 1 }' "$root/skills/anderton/SKILL.md" ||
   fail "SKILL.md frontmatter must set disable-model-invocation: true"
 
-for script in claim.sh waiting.sh spawn.sh retire.sh; do
+for script in claim.sh waiting.sh spawn.sh retire.sh watch.sh; do
   [ -x "$root/skills/anderton/scripts/$script" ] || fail "scripts/$script must exist and be executable"
 done
 [ -f "$root/skills/anderton/scripts/session-lib.sh" ] || fail "scripts/session-lib.sh must exist"

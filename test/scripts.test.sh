@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Drives claim.sh and waiting.sh against a throwaway Claude Code home with sessions in two projects.
+# Drives the scripts against a throwaway Claude Code home with sessions in two projects.
 # Runs under macOS's bash 3.2 as well as Linux: bash test/scripts.test.sh
 set -euo pipefail
 
@@ -795,6 +795,160 @@ for i in 1 2 3 4 5; do
   rm -f "$(holder_path "$zeta" "x$i")" "$(holder_path "$zeta" "y$i")"
 done
 check "concurrent claims of two scopes by one session never both succeed" [ "$both" -eq 0 ]
+
+# watch.sh, the Stop hook, in a project of its own.
+watched="$work/watched"
+mkdir -p "$watched"
+git -C "$watched" init -q
+spawn; p_wh=$pid
+spawn; p_wa=$pid
+spawn; p_wb=$pid
+session "$p_wh" wh-1 "$watched" holder
+session "$p_wa" wa-1 "$watched" other
+session "$p_wb" wb-1 "$watched" scope-lead
+for id in wh-1 wa-1 wb-1; do transcript "$id" "$recent" asking "Before the question."; done
+(cd "$watched" && env CLAUDE_PID="$p_wh" CLAUDE_CODE_SESSION_ID=wh-1 "$scripts/claim.sh" >/dev/null)
+(cd "$watched" && env CLAUDE_PID="$p_wb" CLAUDE_CODE_SESSION_ID=wb-1 "$scripts/claim.sh" --scope lead >/dev/null)
+holder_file=$(jq -rn --arg d "$CLAUDE_CONFIG_DIR/anderton" --arg k "$(project_key "$(project_root "$watched")")" '"\($d)/\($k).json"')
+watcher_file="${holder_file%.json}.watch"
+watch_in() { printf '{"session_id":"%s","cwd":"%s","hook_event_name":"Stop"}' "$1" "$2"; }
+watch_run() { # watch_run <session id>: sets $out and $status
+  set +e
+  out=$(watch_in "$1" "$watched" | "$scripts/watch.sh" 2>&1)
+  status=$?
+  set -e
+}
+watch_start() { # watch_start <session id>: runs the watch in the background, sets $watcher_pid
+  watch_in "$1" "$watched" | "$scripts/watch.sh" > "$work/watch.out" 2>&1 &
+  watcher_pid=$!
+  sleepers="$sleepers $watcher_pid"
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    if [ -s "$watcher_file" ]; then return; fi
+    sleep 0.1
+  done
+}
+
+registry "$p_wa" waiting "permission prompt"
+registry "$p_wb" idle
+snapshot=$(cat "$CLAUDE_CONFIG_DIR/sessions/$p_wa.json")
+export ANDERTON_WATCH_TICK=0.05
+out=$(cd "$watched" && env CLAUDE_PID="$p_wh" "$scripts/waiting.sh" --blocked)
+check "--blocked lists a session blocked on a person" contains "=== other  $watched  (waiting: permission prompt"
+check "--blocked prints the header alone, not the session's text" eval '! contains "Ship it today?" && ! contains "Before the question."'
+check "--blocked leaves out a session that is not blocked" eval '! contains "scope-lead"'
+watch_run wh-1
+check "the holder's watch exits 2, which wakes it" [ "$status" -eq 2 ]
+check "and names the blocked session" contains "=== other  $watched  (waiting: permission prompt"
+check "and says nothing was answered" contains "Nothing has been answered or approved."
+check "and carries none of the session's text" eval '! contains "Ship it today?" && ! contains "Before the question."'
+check "it leaves the blocked session's registry entry as it was" [ "$snapshot" = "$(cat "$CLAUDE_CONFIG_DIR/sessions/$p_wa.json")" ]
+check "it removes its watch file when it exits" [ ! -e "$watcher_file" ]
+
+# A block already reported wakes no one: the watch keeps running, and a second copy leaves at once.
+watch_start wh-1
+sleep 1
+check "a block already reported does not end the watch" [ -s "$watcher_file" ]
+watch_run wh-1
+check "a second watch for the same holder leaves at once" [ "$status" -eq 0 ] && [ -z "$out" ] && [ -s "$watcher_file" ]
+now_ms=$((now_ms + 1000))
+registry "$p_wa" waiting "input needed"
+set +e; wait "$watcher_pid"; status=$?; set -e
+check "the same session blocking again wakes the holder" [ "$status" -eq 2 ] && grep -qF "(waiting: input needed" "$work/watch.out"
+
+# A holder in a scope is still a session the project's holder hears about.
+registry "$p_wb" waiting "permission prompt"
+watch_run wh-1
+check "the project's holder hears about a blocked scope holder" contains "=== scope-lead"
+check "and not a session it already heard about" eval '! contains "=== other "'
+out=$(cd "$watched" && env CLAUDE_PID="$p_wh" "$scripts/waiting.sh")
+check "plain waiting.sh shows what a blocked scope holder is asking" contains "=== scope-lead"
+out=$(cd "$watched" && env CLAUDE_PID="$p_wa" "$scripts/waiting.sh" --blocked)
+check "--blocked never lists the project's holder" eval '! contains "=== holder "'
+registry "$p_wb" idle
+
+# Everywhere but the holder, and on any failure, it exits 0 and prints nothing.
+watch_run wa-1
+check "another session's hook exits 0 with no output" [ "$status" -eq 0 ] && [ -z "$out" ]
+check "and starts no watch" [ ! -e "$watcher_file" ]
+set +e; out=$(printf 'not json' | "$scripts/watch.sh" 2>&1); status=$?; set -e
+check "input it cannot read exits 0 with no output" [ "$status" -eq 0 ] && [ -z "$out" ]
+unclaimed="$work/unclaimed"
+mkdir -p "$unclaimed"
+git -C "$unclaimed" init -q
+set +e; out=$(watch_in wa-1 "$unclaimed" | "$scripts/watch.sh" 2>&1); status=$?; set -e
+check "a project with no holder exits 0 with no output" [ "$status" -eq 0 ] && [ -z "$out" ]
+
+# /clear keeps the holder's process and gives it a new session id; the id in the record goes stale.
+jq -c '.sessionId = "wh-2"' "$CLAUDE_CONFIG_DIR/sessions/$p_wh.json" > "$work/reg.tmp"
+mv "$work/reg.tmp" "$CLAUDE_CONFIG_DIR/sessions/$p_wh.json"
+now_ms=$((now_ms + 1000))
+registry "$p_wa" waiting "permission prompt"
+watch_run wh-2
+check "the holder is still watched after /clear" [ "$status" -eq 2 ]
+now_ms=$((now_ms + 1000))
+registry "$p_wa" waiting "permission prompt"
+spawn dead
+echo "$pid" > "$watcher_file"
+watch_run wh-2
+check "a watch file left by a dead process does not stop the next watch" [ "$status" -eq 2 ]
+
+watch_start wh-2
+mv "$holder_file" "$holder_file.gone"
+set +e; wait "$watcher_pid"; status=$?; set -e
+check "the watch ends with no output once the session stops holding the role" [ "$status" -eq 0 ] && [ ! -s "$work/watch.out" ]
+mv "$holder_file.gone" "$holder_file"
+
+# A take-over during the old holder's watch: the new holder's watch outlasts it rather than leaving to it.
+export ANDERTON_WATCH_TICK=2
+watch_start wh-2
+export ANDERTON_WATCH_TICK=0.05
+(cd "$watched" && env CLAUDE_PID="$p_wa" CLAUDE_CODE_SESSION_ID=wa-1 "$scripts/claim.sh" --take-over >/dev/null)
+now_ms=$((now_ms + 1000))
+registry "$p_wb" waiting "permission prompt"
+watch_run wa-1
+check "a new holder's watch replaces the old holder's" [ "$status" -eq 2 ]
+check "and reports to the new holder" contains "=== scope-lead"
+registry "$p_wb" idle
+(cd "$watched" && env CLAUDE_PID="$p_wh" CLAUDE_CODE_SESSION_ID=wh-2 "$scripts/claim.sh" --take-over >/dev/null)
+unset ANDERTON_WATCH_TICK
+
+# A holder from an earlier version has its record in the machine-wide file and may have no anderton directory.
+export ANDERTON_WATCH_TICK=0.05
+mv "$CLAUDE_CONFIG_DIR/anderton" "$work/anderton.aside"
+jq -c '{pid, startedAt, sessionId}' "$CLAUDE_CONFIG_DIR/sessions/$p_wh.json" > "$CLAUDE_CONFIG_DIR/anderton.json"
+watch_run wh-2
+check "a legacy holder with no anderton directory is still watched" [ "$status" -eq 2 ]
+rm -rf "$CLAUDE_CONFIG_DIR/anderton" "$CLAUDE_CONFIG_DIR/anderton.json"
+mv "$work/anderton.aside" "$CLAUDE_CONFIG_DIR/anderton"
+unset ANDERTON_WATCH_TICK
+
+# A background session Claude Code also registers is one session, not two.
+jq -nc --arg w "$watched" '[{kind: "background", name: "other", sessionId: "wa-1", cwd: $w, state: "blocked"}]' > "$FAKE_AGENTS"
+out=$(cd "$watched" && env CLAUDE_PID="$p_wh" "$scripts/waiting.sh")
+check "a registered background session is listed once" [ "$(printf '%s\n' "$out" | grep -c '^=== other ')" -eq 1 ]
+echo '[]' > "$FAKE_AGENTS"
+
+# The You Should Know plugin's store is a private format, read only when it has the shape expected.
+store="$CLAUDE_CONFIG_DIR/plugins/store"
+mkdir -p "$store"
+ysk="$store/cc-plugin-you-should-know_builtin-abc123.json"
+waiting() { (cd "$watched" && env CLAUDE_PID="$p_wh" "$scripts/waiting.sh" "$@"); }
+printf '{"seen":["Old note.","New\\nnote."],"known":["Old note."]}' > "$ysk"
+out=$(waiting)
+check "prints a You Should Know note not yet reported" contains "- New note."
+check "under its own heading" contains "=== You Should Know, not yet reported"
+check "and not one already reported" eval '! contains "Old note."'
+out=$(waiting --blocked)
+check "--blocked leaves the notes out" eval '! contains "You Should Know"'
+for bad in 'not json' '{"seen":["A note."]}' '{"seen":["A note."],"known":{"a":1}}' '["A note."]'; do
+  printf '%s' "$bad" > "$ysk"
+  set +e; out=$(waiting 2>&1); status=$?; set -e
+  check "a store reading $bad prints no notes and no error" [ "$status" -eq 0 ]
+  check "  and shows nothing of it" eval '! contains "A note." && ! contains "You Should Know" && ! contains "jq:"'
+done
+rm -f "$ysk"
+out=$(waiting)
+check "no store prints no notes" eval '! contains "You Should Know"'
 
 [ "$failures" -eq 0 ] || { echo "$failures check(s) failed"; exit 1; }
 echo "all checks passed"

@@ -48,6 +48,11 @@ deploys there. One session holds one role per project, and the claim refuses a s
    sessions included; `--all` for every project on this machine) and check
    each item against its source (PR state, run list). The user may have answered
    elsewhere. Lead every status report with what is waiting on the user.
+   You don't have to remember this for a blocked session: from the end of the turn
+   that claims the role, the plugin's Stop hook (`scripts/watch.sh`) wakes you within
+   about 30 seconds when another session in this project blocks on a person, naming
+   the session. Run `scripts/waiting.sh` to see what it asks, then tell the user. The
+   hook reports and nothing more: an alert is never a reason to answer a prompt yourself.
 3. **Review.** Judge every change headed for production on three axes: is it the
    right thing to build (product), is it built right (`references/good-code.md`),
    and are its numbers right (data). Green tests and a clean bot review are
