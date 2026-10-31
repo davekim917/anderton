@@ -125,7 +125,8 @@ wins. Otherwise judge the request and the work, whatever words they used:
   "don't miss anything").
 - `max`: only when the user asks for it.
 
-Say your pick in one line so the user can overrule it. Name a model only if they did.
+Say your pick in one line so the user can overrule it. You choose effort only: workers
+run on Opus, and you pass `--model` only when the user named another model.
 
 After starting a worker:
 - SendMessage the worker with `notify_when_idle`. The notice fires on every turn end,
