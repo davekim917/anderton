@@ -16,11 +16,11 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/anderton-live.XXXXXX")
 work=$(cd "$work" && pwd -P)
 sock="anderton-live-$$"
 home="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-holder_record="" herdr_tab=""
+holder_record="" herdr_tabs=""
 cleanup() {
   tmux -L "$sock" kill-server 2>/dev/null || true
   if [ -n "$holder_record" ]; then rm -f "$holder_record"; fi
-  if [ -n "$herdr_tab" ]; then herdr tab close "$herdr_tab" >/dev/null 2>&1 || true; fi
+  for tab in $herdr_tabs; do herdr tab close "$tab" >/dev/null 2>&1 || true; done
   rm -rf "$work"
 }
 trap cleanup EXIT
@@ -34,6 +34,7 @@ cat > "$work/hook.sh" <<'HOOK'
 echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"live test"}}'
 HOOK
 chmod +x "$work/hook.sh"
+jq -n '{permissions: {ask: ["Bash(*rule-marker*)", "Bash(*node_modules/.bin/vitest*)"]}}' > "$work/ask-settings.json"
 jq -n --arg c "$work/hook.sh" '{hooks: {PreToolUse: [{matcher: "Bash", hooks: [{type: "command", command: $c}]}]}}' > "$work/hook-settings.json"
 
 failures=0
@@ -245,10 +246,29 @@ check "it reads in full from the transcript" eval '[ "$status" -eq 0 ] && contai
 answer live-tall yes "$(fingerprint_of)"
 check "  and yes runs the whole command" eval '[ "$status" -eq 0 ] && ran tall-marker-01 && ran tall-marker-40'
 
+# A permission rule or a hook gives its reason between the command and the question.
+start_session live-rule default --settings "$work/ask-settings.json"
+t resize-window -t "live:live-rule" -x 40 -y 16
+sleep 1
+ask_for live-rule "touch $(seq -f 'rule-marker-%02g' 1 30 | tr '\n' ' ')"
+answer live-rule
+check "a tall dialog with a permission rule's reason reads in full" eval '[ "$status" -eq 0 ] && contains "rule-marker-01" && contains "rule-marker-30"'
+check "  and shows the reason" contains "Permission rule"
+answer live-rule no "$(fingerprint_of)"
+check "  and no refuses it" eval '[ "$status" -eq 0 ] && never_ran rule-marker-01'
+t resize-window -t "live:live-hook" -x 40 -y 16
+sleep 1
+ask_for live-hook "touch $(seq -f 'hook-marker-%02g' 1 30 | tr '\n' ' ')"
+answer live-hook
+check "a tall dialog with a hook's reason reads in full" eval '[ "$status" -eq 0 ] && contains "hook-marker-01" && contains "hook-marker-30"'
+check "  and shows the reason" contains "live test"
+answer live-hook no "$(fingerprint_of)"
+check "  and no refuses it" eval '[ "$status" -eq 0 ] && never_ran hook-marker-01'
+
 # A real herdr tab, when this runs inside herdr.
 if [ -n "${HERDR_SOCKET_PATH:-}" ] && [ -n "${HERDR_WORKSPACE_ID:-}" ] && [ -z "${LIVE_TMUX_ONLY:-}" ]; then
   created=$(herdr tab create --workspace "$HERDR_WORKSPACE_ID" --cwd "$repo" --label live-h --no-focus)
-  herdr_tab=$(printf '%s' "$created" | jq -r '.result.tab.tab_id')
+  herdr_tabs=$(printf '%s' "$created" | jq -r '.result.tab.tab_id')
   herdr agent start live-h --kind claude --pane "$(printf '%s' "$created" | jq -r '.result.root_pane.pane_id')" \
     --timeout 120000 -- -n live-h --permission-mode default --model haiku >/dev/null
   herdr agent prompt live-h "Use the Bash tool to run exactly this command and nothing else, with no commentary: touch marker-herdr" >/dev/null
@@ -273,6 +293,18 @@ if [ -n "${HERDR_SOCKET_PATH:-}" ] && [ -n "${HERDR_WORKSPACE_ID:-}" ] && [ -z "
   check "herdr: a dialog taller than its tab reads in full" eval '[ "$status" -eq 0 ] && contains "touch h-file-1" && contains "touch h-file-90"'
   answer live-h no "$(fingerprint_of)"
   check "herdr: and no refuses it" eval '[ "$status" -eq 0 ] && never_ran h-file-1'
+  created=$(herdr tab create --workspace "$HERDR_WORKSPACE_ID" --cwd "$repo" --label live-hr --no-focus)
+  herdr_tabs="$herdr_tabs $(printf '%s' "$created" | jq -r '.result.tab.tab_id')"
+  herdr agent start live-hr --kind claude --pane "$(printf '%s' "$created" | jq -r '.result.root_pane.pane_id')" \
+    --timeout 120000 -- -n live-hr --permission-mode default --model haiku --settings "$work/ask-settings.json" >/dev/null
+  herdr agent prompt live-hr "Use the Bash tool once to run one single command: ./node_modules/.bin/vitest run followed by 90 test file arguments, tests/file-1.test.ts through tests/file-90.test.ts, one per line with backslash continuations, no loop and no commentary." >/dev/null
+  wait_blocked live-hr
+  sleep 2
+  answer live-hr
+  check "herdr: a tall vitest command stopped by a rule reads in full" eval '[ "$status" -eq 0 ] && contains "vitest run" && contains "tests/file-1.test.ts" && contains "tests/file-90.test.ts"'
+  check "herdr: and shows the rule's reason" contains "Permission rule"
+  answer live-hr no "$(fingerprint_of)"
+  check "herdr: and no refuses it" [ "$status" -eq 0 ]
 fi
 
 [ "$failures" -eq 0 ] || { echo "$failures check(s) failed"; exit 1; }
