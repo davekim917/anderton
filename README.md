@@ -231,8 +231,11 @@ While a woken holder is mid-turn no watch runs, so a block in that turn is repor
 session. It reads the prompt from the session's herdr tab or tmux pane and prints it with a
 fingerprint. On your answer it re-reads the screen, refuses unless the prompt is unchanged, presses
 Enter (`yes`, this one call) or Esc (`no`), and confirms from the screen that the prompt closed. It
-refuses a cursor not on a plain "1. Yes", so it can't pick "always allow", and a dialog taller than
-the screen. Only a session holding an Anderton role in the target's project can run it. That your
+refuses a cursor not on a plain "1. Yes", so it can't pick "always allow". A dialog taller than its
+screen has lost its top, and neither herdr nor tmux can bring it back, so for a Bash command it reads
+the full text from the session's transcript, and only if that session has one call waiting and the
+lines still on screen are where that command ends. A hook that rewrites a command above those lines
+wouldn't show. Any other dialog taller than its screen is refused. Only a session holding an Anderton role in the target's project can run it. That your
 word triggers it is an instruction to the Anderton, not something the script can prove, and a
 session running without permission checks can press keys by other means: this prevents mistakes
 and isn't a security boundary. It sees what the terminal draws, so what a terminal doesn't draw, such
