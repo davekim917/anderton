@@ -234,6 +234,17 @@ check "a hook's prompt in a bypassed session reads" contains "touch marker-hook"
 answer live-hook yes "$(fingerprint_of)"
 check "  and yes runs its command" ran marker-hook
 
+# A dialog taller than its pane: its top is gone from the screen and from tmux's history, so the transcript supplies it.
+start_session live-tall
+t resize-window -t "live:live-tall" -x 40 -y 16
+sleep 1
+ask_for live-tall "touch $(seq -f 'tall-marker-%02g' 1 40 | tr '\n' ' ')"
+check "a tall dialog's first lines are off the screen" eval '! screen_of live-tall | grep -qF "tall-marker-01"'
+answer live-tall
+check "it reads in full from the transcript" eval '[ "$status" -eq 0 ] && contains "tall-marker-01" && contains "tall-marker-40"'
+answer live-tall yes "$(fingerprint_of)"
+check "  and yes runs the whole command" eval '[ "$status" -eq 0 ] && ran tall-marker-01 && ran tall-marker-40'
+
 # A real herdr tab, when this runs inside herdr.
 if [ -n "${HERDR_SOCKET_PATH:-}" ] && [ -n "${HERDR_WORKSPACE_ID:-}" ] && [ -z "${LIVE_TMUX_ONLY:-}" ]; then
   created=$(herdr tab create --workspace "$HERDR_WORKSPACE_ID" --cwd "$repo" --label live-h --no-focus)
@@ -255,6 +266,13 @@ if [ -n "${HERDR_SOCKET_PATH:-}" ] && [ -n "${HERDR_WORKSPACE_ID:-}" ] && [ -z "
   answer live-h no "$(fingerprint_of)"
   check "herdr: no answers the prompt" [ "$status" -eq 0 ]
   check "herdr: and the command did not run" never_ran marker-herdr-no
+  herdr agent prompt live-h "Use the Bash tool once to run one single command made of 90 separate lines, touch h-file-1 through touch h-file-90, each on its own line, with no loop and no commentary." >/dev/null
+  wait_blocked live-h
+  sleep 2
+  answer live-h
+  check "herdr: a dialog taller than its tab reads in full" eval '[ "$status" -eq 0 ] && contains "touch h-file-1" && contains "touch h-file-90"'
+  answer live-h no "$(fingerprint_of)"
+  check "herdr: and no refuses it" eval '[ "$status" -eq 0 ] && never_ran h-file-1'
 fi
 
 [ "$failures" -eq 0 ] || { echo "$failures check(s) failed"; exit 1; }

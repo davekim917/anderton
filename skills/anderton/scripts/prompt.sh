@@ -30,8 +30,8 @@ refuse() {
 }
 
 # The dialog the screen on stdin ends in, or nothing. It must be the last thing on the screen, so an answered prompt
-# in the scrollback never counts. Its top rule must show, so a dialog taller than the screen is refused rather than
-# answered half-read. Its last cursor must sit on a plain "1. Yes", the one option that allows this call and nothing
+# in the scrollback never counts. Its top rule must show, so a dialog taller than the screen is never answered
+# half-read. Its last cursor must sit on a plain "1. Yes", the one option that allows this call and nothing
 # more: Enter then cannot pick "always allow" or "don't ask again". The options come last, so the last cursor is the
 # real one; a description above them is model-written. A dialog's rules start at column 0 and its contents are
 # indented, so a rule a model writes into a command cannot pass for its edge.
@@ -56,6 +56,77 @@ prompt_block() {
     }'
 }
 
+# A dialog taller than its screen has lost its top, and no read brings it back: tmux's history holds only older
+# frames, whose rules would pass for its edge, and herdr refuses to read further while the agent is blocked. For such a
+# screen this prints one part of what is left: "command", the lines above the options, or "options", down to "Esc to
+# cancel". The cursor rule is prompt_block's. Dashed rules, like solid ones, start at column 0 and a command's lines
+# are indented, so a rule a model writes cannot end the command early.
+clipped_dialog() {
+  LC_ALL=C awk -v rule="──────────" -v dash="╌╌╌╌╌╌╌╌╌╌" -v part="$1" '
+    { raw[NR] = $0; sub(/[ \t\r]+$/, ""); line[NR] = $0 }
+    END {
+      end = NR
+      while (end > 0 && (line[end] == "" || index(line[end], rule) == 1)) end--
+      if (end == 0 || line[end] !~ /^ *Esc to cancel/) exit
+      options = end
+      while (options > 0 && index(line[options], dash) != 1) options--
+      if (options == 0 || line[options + 1] !~ /^ *Do you want to proceed\?$/) exit
+      cursor = ""
+      for (i = options + 1; i <= end; i++) {
+        t = line[i]
+        sub(/^ */, "", t)
+        if (index(t, "❯") == 1) cursor = t
+      }
+      if (cursor !~ /^❯ +1\. +Yes$/) exit
+      top = options - 1
+      while (top > 0 && index(line[top], dash) != 1) top--
+      if (part == "command") { for (i = top + 1; i < options; i++) print raw[i] }
+      else { for (i = options + 1; i <= end; i++) print raw[i] }
+    }'
+}
+
+# The one tool call the session's transcript leaves unanswered, as JSON, when that call is a Bash command. Nothing
+# when there is none, or several: the dialog on screen could be any of them.
+pending_bash() {
+  local t
+  for t in "$home"/projects/*/"$sid".jsonl; do
+    [ -f "$t" ] || continue
+    tail -n 1000 "$t" | jq -sc '
+      [.[] | select(.type == "user") | .message.content | arrays | .[] | select(.type? == "tool_result") | .tool_use_id] as $done
+      | [.[] | select(.type == "assistant") | .message.content | arrays | .[] | select(.type? == "tool_use") | select(.id as $id | ($done | index($id)) == null)]
+      | if length == 1 and .[0].name == "Bash" and (.[0].input.command | type) == "string" then .[0] else empty end' 2>/dev/null || true
+    return 0
+  done
+}
+
+# What is left of a text once the terminal's wrapping, indents and gutter no longer matter.
+squeezed() {
+  LC_ALL=C sed 's/│//g' | tr -d '[:space:]'
+}
+
+# Sets $text and $call to the full prompt of a dialog taller than $screen, from the session's transcript, and $clipped
+# when the screen shows such a dialog.
+# Only a Bash command, whose exact text the transcript records. The lines still on screen must be where that command
+# ends, which proves the transcript's pending call is the one this dialog is asking about.
+read_clipped() {
+  local shown options pending command description
+  options=$(printf '%s\n' "$screen" | clipped_dialog options)
+  [ -n "$options" ] || return 0
+  clipped=1
+  shown=$(printf '%s\n' "$screen" | clipped_dialog command | squeezed)
+  pending=$(pending_bash)
+  if [ -z "$shown" ] || [ -z "$pending" ]; then return 0; fi
+  command=$(printf '%s' "$pending" | jq -r '.input.command')
+  case $(printf '%s' "$command" | squeezed) in
+    *"$shown") ;;
+    *) return 0 ;;
+  esac
+  description=$(printf '%s' "$pending" | jq -r '.input.description // empty')
+  call=$(printf '%s' "$pending" | jq -r '.id')
+  text=$(printf ' Bash command, read in full from the session'"'"'s transcript: its dialog is taller than the screen\n %s\n\n%s\n\n%s' \
+    "$description" "$command" "$options")
+}
+
 # True when the screen on stdin ends in a dialog of any kind, answerable or not.
 dialog_showing() {
   LC_ALL=C awk -v rule="──────────" '
@@ -72,7 +143,7 @@ read_screen() {
 
 # The prompt's identity: the same text in a later prompt, or in another session or pane, reads differently.
 fingerprint() {
-  printf '%s\n%s\n%s\n%s\n' "$sid" "$since" "$pane" "$text" | sha256 | cut -d' ' -f1
+  printf '%s\n%s\n%s\n%s\n%s\n' "$sid" "$since" "$pane" "$call" "$text" | sha256 | cut -d' ' -f1
 }
 
 sha256() {
@@ -150,6 +221,11 @@ find_pane
 [ -n "$pane" ] || refuse "$name is not in a herdr tab or tmux pane this session can reach: open its tab."
 screen=$(read_screen 2>/dev/null) || refuse "Could not read $name's screen: open its tab."
 text=$(printf '%s\n' "$screen" | prompt_block)
+call="" clipped=""
+[ -n "$text" ] || read_clipped
+if [ -z "$text" ] && [ -n "$clipped" ]; then
+  refuse "$name's dialog is taller than its screen and its transcript does not show the full command: open its tab."
+fi
 [ -n "$text" ] || refuse "$name does not show a prompt this can answer: open its tab."
 print=$(fingerprint)
 
