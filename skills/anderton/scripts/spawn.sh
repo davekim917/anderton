@@ -3,7 +3,7 @@
 # checkout), in the caller's permission mode, told to report to the caller by name. Inside herdr it opens in a new
 # tab, inside tmux in a new window, where the user can watch it and type into it; elsewhere, or with --bg, it runs
 # in the background. $ANDERTON_START_WAIT (seconds, default 30) bounds the wait for a tmux worker to register.
-# usage: spawn.sh [--bg] [--model M] [--effort E] [--mode MODE] [--base REF] <name> [brief-file]   (else the brief on stdin)
+# usage: spawn.sh --effort LEVEL [--bg] [--model M] [--mode MODE] [--base REF] <name> [brief-file]   (else the brief on stdin)
 # Worktrees go under $ANDERTON_WORKTREES, default the folder that holds the repository, as wt-<name>.
 # Portable to macOS's bash 3.2 and BSD userland.
 set -euo pipefail
@@ -16,7 +16,7 @@ command -v claude >/dev/null 2>&1 || {
   exit 1
 }
 
-usage="usage: spawn.sh [--bg] [--model M] [--effort E] [--mode MODE] [--base REF] <name: a-z 0-9 -> [brief-file]"
+usage="usage: spawn.sh --effort low|medium|high|xhigh|max [--bg] [--model M] [--mode MODE] [--base REF] <name: a-z 0-9 -> [brief-file]"
 model="" effort="" mode="" base="" launcher=""
 while [ $# -gt 0 ]; do
   case $1 in
@@ -38,6 +38,12 @@ done
 name="${1:-}"
 case $name in
   '' | -* | *[!a-z0-9-]*) echo "$usage" >&2; exit 2 ;;
+esac
+# Required so a worker never runs at the default just because nobody chose: the user's level, else the caller's
+# judgment of the work.
+case $effort in
+  low | medium | high | xhigh | max) ;;
+  *) echo "$usage" >&2; exit 2 ;;
 esac
 if [ -n "${2:-}" ]; then brief=$(cat "$2"); else brief=$(cat); fi
 if [ -z "$launcher" ]; then
@@ -144,9 +150,8 @@ failed() {
   exit 1
 }
 
-set -- -n "$name" --permission-mode "$mode"
+set -- -n "$name" --permission-mode "$mode" --effort "$effort"
 [ -z "$model" ] || set -- "$@" --model "$model"
-[ -z "$effort" ] || set -- "$@" --effort "$effort"
 # A tab or window id is unique only within its server, so the record keeps which server it was opened in.
 id="" tab="" socket="" server=""
 if [ "$launcher" = herdr ]; then
