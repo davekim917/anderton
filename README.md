@@ -185,7 +185,7 @@ that is `blocked`, and one that is `done` with a turn in the last two days. A wo
 started is listed, marked `(worker)`, only while the registry or `claude agents` says it is
 blocked on a prompt; otherwise it reports to the Anderton.
 
-**`spawn.sh [--bg] [--model M] [--effort E] [--mode MODE] [--base REF] <name> [brief-file]`**
+**`spawn.sh --effort LEVEL [--bg] [--model M] [--mode MODE] [--base REF] <name> [brief-file]`**
 starts a worker: a full Claude Code session named `<name>`, in a new git worktree at
 `$ANDERTON_WORKTREES/wt-<name>` (default: the folder that holds the repository). The base is
 `origin/HEAD`, else `origin/main`, `origin/master` or `HEAD`.
@@ -201,6 +201,9 @@ starts a worker: a full Claude Code session named `<name>`, in a new git worktre
   startup prompt.
 - Elsewhere, or with `--bg`, it is a background session (`claude --bg`).
 - It runs in the caller's permission mode, read from the caller's transcript.
+- `--effort` is required (`low`, `medium`, `high`, `xhigh` or `max`), so a worker never runs at the
+  default just because nobody chose. The Anderton picks it from your request and says so; a level you
+  name wins.
 - The brief, from the file or stdin, gets a closing rule: report to the caller by name with
   SendMessage, and don't deploy, restart or message anyone off the machine unless the task says to.
 - The worker is recorded in `~/.claude/anderton/workers/<name>.json`, with the herdr or tmux server

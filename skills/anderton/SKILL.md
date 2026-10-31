@@ -108,13 +108,26 @@ that defines done, never "figure it out". Write code yourself only for a fix you
 state in one sentence. A sub-agent of this session (`/orchestrate`, if installed) fits
 when the work is small and self-contained.
 
-**Start a session** with `scripts/spawn.sh <name> <brief-file>` (`--model`, `--effort`,
-`--base <ref>`). It makes a worktree beside the repository (under
+**Start a session** with `scripts/spawn.sh --effort <level> <name> <brief-file>`
+(`--model`, `--base <ref>`). It makes a worktree beside the repository (under
 `$ANDERTON_WORKTREES` when set), starts a full session there in your permission
 mode, and appends to the brief that the worker reports to you by name. When you run
 inside herdr or tmux, the worker opens in a new tab or window the user can watch and
 type into; elsewhere, or with `--bg`, it runs in the background.
-Then:
+
+**Choose the effort yourself for every worker.** `spawn.sh` refuses to start without
+it, and you are the one holding the user's actual words. A level the user named
+wins. Otherwise judge the request and the work, whatever words they used:
+- `low`: well-understood or mechanical work, or they asked for a quick pass.
+- `medium` or `high`: everything in between, in proportion.
+- `xhigh`: ambiguous investigation or design, work with many interacting parts, or
+  any request for unusual care ("use lots of tokens", "iterate until you're proud",
+  "don't miss anything").
+- `max`: only when the user asks for it.
+
+Say your pick in one line so the user can overrule it. Name a model only if they did.
+
+After starting a worker:
 - SendMessage the worker with `notify_when_idle`. The notice fires on every turn end,
   not only when the task is done, so check the PR or worktree before you believe it,
   and subscribe again after each notice.

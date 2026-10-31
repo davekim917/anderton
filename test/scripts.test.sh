@@ -449,7 +449,7 @@ run() { # run <script> [args...]: as the lead session; sets $out and $status
   status=$?
   set -e
 }
-run "$scripts/spawn.sh" fix-login <<'BRIEF'
+run "$scripts/spawn.sh" --effort high fix-login <<'BRIEF'
 Fix the login redirect. Done when the redirect test passes.
 BRIEF
 check "spawn.sh starts the worker" [ "$status" -eq 0 ]
@@ -459,39 +459,52 @@ check "named, in the caller's permission mode" grep -qx -- "acceptEdits" "$FAKE_
 check "with the brief" grep -qF "Fix the login redirect." "$FAKE_LOG.bg"
 check "telling it to report to the caller by name" grep -qF 'Tell "lead-session" by SendMessage' "$FAKE_LOG.bg"
 check "recording its id, which claude stop and rm take" [ "$(jq -r .id "$CLAUDE_CONFIG_DIR/anderton/workers/fix-login.json")" = a1b2c3d4 ]
+check "at the effort it was given" [ "$(grep -A1 -x -- --effort "$FAKE_LOG.bg" | tail -n 1)" = high ]
+rm -f "$FAKE_LOG.bg"
+for bad in "" "--effort turbo"; do
+  # shellcheck disable=SC2086 # split on purpose: an empty $bad is no flag at all
+  run "$scripts/spawn.sh" $bad no-effort <<'BRIEF'
+Task.
+BRIEF
+  check "spawn.sh refuses a worker whose effort is '$bad'" [ "$status" -eq 2 ]
+  check "and names the levels it takes" contains "--effort low|medium|high|xhigh|max"
+  check "and starts nothing" [ ! -e "$FAKE_LOG.bg" ]
+  check "and makes no worktree" [ ! -e "$work/wt-no-effort" ]
+  check "and records no worker" [ ! -e "$CLAUDE_CONFIG_DIR/anderton/workers/no-effort.json" ]
+done
 mkdir -p "$work/elsewhere"
 set +e
-out=$(cd "$work/elsewhere" && echo "Task." | env CLAUDE_CODE_SESSION_ID=lead-1 CLAUDE_PID="$p_lead" ANDERTON_WORKTREES=../workers "$scripts/spawn.sh" rel-worker 2>&1)
+out=$(cd "$work/elsewhere" && echo "Task." | env CLAUDE_CODE_SESSION_ID=lead-1 CLAUDE_PID="$p_lead" ANDERTON_WORKTREES=../workers "$scripts/spawn.sh" --effort high rel-worker 2>&1)
 status=$?
 set -e
 check "a relative ANDERTON_WORKTREES is resolved from the caller's directory" [ "$status" -eq 0 ] && [ "$(sed -n 1p "$FAKE_LOG.bg")" = "$work/workers/wt-rel-worker" ]
 run "$scripts/retire.sh" rel-worker
-run "$scripts/spawn.sh" fix-login <<'BRIEF'
+run "$scripts/spawn.sh" --effort high fix-login <<'BRIEF'
 Again.
 BRIEF
 check "a second worker of the same name is refused" [ "$status" -eq 1 ]
 : > "$CLAUDE_CONFIG_DIR/anderton/workers/race-name.json"
-run "$scripts/spawn.sh" race-name <<'BRIEF'
+run "$scripts/spawn.sh" --effort high race-name <<'BRIEF'
 Task.
 BRIEF
 check "a name another spawn has reserved is refused" [ "$status" -eq 1 ]
 check "and that reservation is left in place" [ -e "$CLAUDE_CONFIG_DIR/anderton/workers/race-name.json" ]
 rm "$CLAUDE_CONFIG_DIR/anderton/workers/race-name.json"
 set +e
-out=$(echo "Task." | env CLAUDE_CODE_SESSION_ID=lead-1 CLAUDE_PID="$p_lead" FAKE_BG_FAIL=1 "$scripts/spawn.sh" fail-start 2>&1)
+out=$(echo "Task." | env CLAUDE_CODE_SESSION_ID=lead-1 CLAUDE_PID="$p_lead" FAKE_BG_FAIL=1 "$scripts/spawn.sh" --effort high fail-start 2>&1)
 status=$?
 set -e
 check "a worker that fails to start releases its name" [ "$status" -eq 1 ] && [ ! -e "$CLAUDE_CONFIG_DIR/anderton/workers/fail-start.json" ]
 check "and its worktree" [ ! -e "$work/wt-fail-start" ]
 echo '[{"kind":"background","name":"busy-name","sessionId":"x","cwd":"/","state":"working"}]' > "$FAKE_AGENTS"
-run "$scripts/spawn.sh" busy-name <<'BRIEF'
+run "$scripts/spawn.sh" --effort high busy-name <<'BRIEF'
 Task.
 BRIEF
 check "a name a live session already has is refused" contains "already named 'busy-name'"
 echo '[]' > "$FAKE_AGENTS"
 spawn; p_anon=$pid; session "$p_anon" anon-1 "$alpha" ""
 set +e
-out=$(echo "Task." | env CLAUDE_CODE_SESSION_ID=anon-1 CLAUDE_PID="$p_anon" "$scripts/spawn.sh" anon-worker 2>&1)
+out=$(echo "Task." | env CLAUDE_CODE_SESSION_ID=anon-1 CLAUDE_PID="$p_anon" "$scripts/spawn.sh" --effort high anon-worker 2>&1)
 status=$?
 set -e
 check "an unnamed caller is refused: the worker would have no one to report to" contains "has no name"
@@ -556,7 +569,7 @@ check "it refuses a worker spawn.sh did not start" [ "$status" -eq 1 ]
 # Inside herdr a worker opens in its own tab; retire.sh closes the tab.
 herdr_env=(HERDR_ENV=1 HERDR_WORKSPACE_ID=w9 "HERDR_SOCKET_PATH=$work/herdr.sock")
 rm -f "$FAKE_LOG.bg"
-run env "${herdr_env[@]}" "$scripts/spawn.sh" tab-worker <<'BRIEF'
+run env "${herdr_env[@]}" "$scripts/spawn.sh" --effort high tab-worker <<'BRIEF'
 Tidy the README.
 BRIEF
 check "inside herdr, spawn.sh starts the worker" [ "$status" -eq 0 ]
@@ -564,13 +577,13 @@ check "in a new tab of the caller's workspace" grep -qx -- "w9" "$FAKE_LOG.tab"
 check "opened on its worktree" grep -qx -- "$work/wt-tab-worker" "$FAKE_LOG.tab"
 check "labelled with its name" grep -qx -- "tab-worker" "$FAKE_LOG.tab"
 check "passing on the caller's Claude home, which the tab would not inherit" grep -qx -- "CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR" "$FAKE_LOG.tab"
-check "running claude in that tab's pane" [ "$(tr '\n' ' ' < "$FAKE_LOG.start")" = "agent start tab-worker --kind claude --pane w9:p5 --timeout 120000 -- -n tab-worker --permission-mode acceptEdits " ]
+check "running claude in that tab's pane" [ "$(tr '\n' ' ' < "$FAKE_LOG.start")" = "agent start tab-worker --kind claude --pane w9:p5 --timeout 120000 -- -n tab-worker --permission-mode acceptEdits --effort high " ]
 check "given the brief" grep -qF "Tidy the README." "$FAKE_LOG.prompt"
 check "and told to report to the caller by name" grep -qF 'Tell "lead-session" by SendMessage' "$FAKE_LOG.prompt"
 check "not started in the background" [ ! -e "$FAKE_LOG.bg" ]
 check "recording its tab and herdr server, which retire.sh closes it in" [ "$(jq -r '"\(.launcher) \(.tab) \(.socket)"' "$CLAUDE_CONFIG_DIR/anderton/workers/tab-worker.json")" = "herdr w9:t5 $work/herdr.sock" ]
 
-run env "${herdr_env[@]}" "$scripts/spawn.sh" --bg bg-in-herdr <<'BRIEF'
+run env "${herdr_env[@]}" "$scripts/spawn.sh" --effort high --bg bg-in-herdr <<'BRIEF'
 Task.
 BRIEF
 check "--bg starts it in the background even inside herdr" [ "$status" -eq 0 ] && [ "$(sed -n 1p "$FAKE_LOG.bg")" = "$work/wt-bg-in-herdr" ]
@@ -578,7 +591,7 @@ echo '[]' > "$FAKE_AGENTS"
 run "$scripts/retire.sh" bg-in-herdr
 
 : > "$FAKE_LOG.closed"
-run env "${herdr_env[@]}" FAKE_HERDR_TAB=w9:t6 FAKE_HERDR_START_FAIL=1 "$scripts/spawn.sh" stuck-tab <<'BRIEF'
+run env "${herdr_env[@]}" FAKE_HERDR_TAB=w9:t6 FAKE_HERDR_START_FAIL=1 "$scripts/spawn.sh" --effort high stuck-tab <<'BRIEF'
 Task.
 BRIEF
 check "a tab whose claude never becomes ready fails the spawn" [ "$status" -eq 1 ]
@@ -587,7 +600,7 @@ check "and offering --bg" contains "Rerun with --bg"
 check "closing that tab" grep -qx "w9:t6" "$FAKE_LOG.closed"
 check "releasing its name" [ ! -e "$CLAUDE_CONFIG_DIR/anderton/workers/stuck-tab.json" ]
 check "and removing its worktree" [ ! -e "$work/wt-stuck-tab" ]
-run env "${herdr_env[@]}" FAKE_HERDR_TAB=w9:t7 FAKE_HERDR_START_FAIL=1 FAKE_HERDR_START_LIVE=1 FAKE_HERDR_CLOSE_FAIL=1 "$scripts/spawn.sh" live-stuck <<'BRIEF'
+run env "${herdr_env[@]}" FAKE_HERDR_TAB=w9:t7 FAKE_HERDR_START_FAIL=1 FAKE_HERDR_START_LIVE=1 FAKE_HERDR_CLOSE_FAIL=1 "$scripts/spawn.sh" --effort high live-stuck <<'BRIEF'
 Task.
 BRIEF
 check "a failed tab whose session is not confirmed stopped fails the spawn" [ "$status" -eq 1 ]
@@ -621,36 +634,36 @@ check "without claude stop or rm, which need an id a tab session lacks" [ ! -s "
 # Inside tmux a worker opens in its own window; retire.sh kills the window.
 echo '[]' > "$FAKE_AGENTS"
 rm -f "$FAKE_LOG.bg"
-run env TMUX=/tmp/fake-tmux,1,0 FAKE_TMUX_LIVE=1 "$scripts/spawn.sh" tmux-worker <<'BRIEF'
+run env TMUX=/tmp/fake-tmux,1,0 FAKE_TMUX_LIVE=1 "$scripts/spawn.sh" --effort high tmux-worker <<'BRIEF'
 Tidy the changelog.
 BRIEF
 check "inside tmux, spawn.sh starts the worker" [ "$status" -eq 0 ]
 check "in a new window, detached, named for it, on its worktree, running claude in the caller's mode" \
-  [ "$(head -n 16 "$FAKE_LOG.window" | tr '\n' ' ')" = "new-window -d -P -F #{window_id} -n tmux-worker -c $work/wt-tmux-worker -e CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR claude -n tmux-worker --permission-mode acceptEdits " ]
+  [ "$(head -n 18 "$FAKE_LOG.window" | tr '\n' ' ')" = "new-window -d -P -F #{window_id} -n tmux-worker -c $work/wt-tmux-worker -e CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR claude -n tmux-worker --permission-mode acceptEdits --effort high " ]
 check "with the brief and its report-by-name rule as one argument" grep -qF 'Tell "lead-session" by SendMessage' "$FAKE_LOG.window"
 check "not started in the background" [ ! -e "$FAKE_LOG.bg" ]
 check "recording its window and tmux server, which retire.sh kills it in" [ "$(jq -r '"\(.launcher) \(.tab) \(.socket)"' "$CLAUDE_CONFIG_DIR/anderton/workers/tmux-worker.json")" = "tmux @7 /tmp/fake-tmux" ]
-run env TMUX=/tmp/fake-tmux,1,0 "${herdr_env[@]}" FAKE_HERDR_TAB=w9:t8 "$scripts/spawn.sh" both-muxes <<'BRIEF'
+run env TMUX=/tmp/fake-tmux,1,0 "${herdr_env[@]}" FAKE_HERDR_TAB=w9:t8 "$scripts/spawn.sh" --effort high both-muxes <<'BRIEF'
 Task.
 BRIEF
 check "inside herdr and tmux at once, herdr opens it" [ "$(jq -r .launcher "$CLAUDE_CONFIG_DIR/anderton/workers/both-muxes.json" 2>/dev/null)" = herdr ]
 echo '[]' > "$FAKE_AGENTS"
 run "$scripts/retire.sh" both-muxes
 check "and retire.sh closes that tab" [ "$status" -eq 0 ]
-run env TMUX=/tmp/fake-tmux,1,0 HERDR_ENV=1 HERDR_WORKSPACE_ID=w9 FAKE_TMUX_WINDOW=@13 FAKE_TMUX_LIVE=1 "$scripts/spawn.sh" no-herdr-socket <<'BRIEF'
+run env TMUX=/tmp/fake-tmux,1,0 HERDR_ENV=1 HERDR_WORKSPACE_ID=w9 FAKE_TMUX_WINDOW=@13 FAKE_TMUX_LIVE=1 "$scripts/spawn.sh" --effort high no-herdr-socket <<'BRIEF'
 Task.
 BRIEF
 check "herdr without its socket is not used: the worker opens in tmux" [ "$(jq -r .launcher "$CLAUDE_CONFIG_DIR/anderton/workers/no-herdr-socket.json" 2>/dev/null)" = tmux ]
 run env FAKE_TMUX_KILL_ENDS=1 "$scripts/retire.sh" no-herdr-socket
 
-run env TMUX=/tmp/fake-tmux,1,0 FAKE_TMUX_WINDOW=@9 FAKE_TMUX_GONE=1 "$scripts/spawn.sh" dead-window <<'BRIEF'
+run env TMUX=/tmp/fake-tmux,1,0 FAKE_TMUX_WINDOW=@9 FAKE_TMUX_GONE=1 "$scripts/spawn.sh" --effort high dead-window <<'BRIEF'
 Task.
 BRIEF
 check "a tmux worker whose window closes at once fails the spawn" [ "$status" -eq 1 ]
 check "saying claude exited" contains "exited at once"
 check "releasing its name" [ ! -e "$CLAUDE_CONFIG_DIR/anderton/workers/dead-window.json" ]
 check "and removing its worktree" [ ! -e "$work/wt-dead-window" ]
-run env TMUX=/tmp/fake-tmux,1,0 FAKE_TMUX_WINDOW=@8 ANDERTON_START_WAIT=1 "$scripts/spawn.sh" slow-window <<'BRIEF'
+run env TMUX=/tmp/fake-tmux,1,0 FAKE_TMUX_WINDOW=@8 ANDERTON_START_WAIT=1 "$scripts/spawn.sh" --effort high slow-window <<'BRIEF'
 Task.
 BRIEF
 check "a tmux worker still unregistered with its window open is kept" [ "$status" -eq 0 ] && [ -f "$CLAUDE_CONFIG_DIR/anderton/workers/slow-window.json" ]
@@ -674,7 +687,7 @@ check "without claude stop or rm" [ ! -s "$FAKE_LOG.life" ]
 # A restarted server reuses ids: retire.sh closes only a tab or window that is still the worker's.
 echo '[]' > "$FAKE_AGENTS"
 : > "$FAKE_LOG.killed"
-run env TMUX=/tmp/fake-tmux,1,0 FAKE_TMUX_WINDOW=@10 FAKE_TMUX_LIVE=1 "$scripts/spawn.sh" reuse-window <<'BRIEF'
+run env TMUX=/tmp/fake-tmux,1,0 FAKE_TMUX_WINDOW=@10 FAKE_TMUX_LIVE=1 "$scripts/spawn.sh" --effort high reuse-window <<'BRIEF'
 Task.
 BRIEF
 awk '$3 != "@10"' "$FAKE_LOG.windows-open" > "$FAKE_LOG.w.tmp" && mv "$FAKE_LOG.w.tmp" "$FAKE_LOG.windows-open"
@@ -685,7 +698,7 @@ check "a tmux window id now held by another server's window is not killed" no_ma
 check "and the worker counts as gone, so it is retired" [ "$status" -eq 0 ]
 check "leaving that other window open" grep -q "99 @10 someone-else" "$FAKE_LOG.windows-open"
 : > "$FAKE_LOG.closed"
-run env "${herdr_env[@]}" FAKE_HERDR_TAB=w9:t9 "$scripts/spawn.sh" reuse-tab <<'BRIEF'
+run env "${herdr_env[@]}" FAKE_HERDR_TAB=w9:t9 "$scripts/spawn.sh" --effort high reuse-tab <<'BRIEF'
 Task.
 BRIEF
 awk '$2 != "w9:t9"' "$FAKE_LOG.tabs-open" > "$FAKE_LOG.t.tmp" && mv "$FAKE_LOG.t.tmp" "$FAKE_LOG.tabs-open"
@@ -695,7 +708,7 @@ check "a herdr tab id now labelled for something else is not closed" no_match "w
 check "and the worker is retired" [ "$status" -eq 0 ]
 
 # An answer the check cannot read keeps the worker; a missing tmux socket means its server is gone.
-run env "${herdr_env[@]}" FAKE_HERDR_TAB=w9:t10 "$scripts/spawn.sh" murky-tab <<'BRIEF'
+run env "${herdr_env[@]}" FAKE_HERDR_TAB=w9:t10 "$scripts/spawn.sh" --effort high murky-tab <<'BRIEF'
 Task.
 BRIEF
 run env FAKE_HERDR_GET_GARBAGE=1 "$scripts/retire.sh" murky-tab
@@ -703,18 +716,18 @@ check "retire.sh keeps a tab worker whose herdr answer it cannot read" [ "$statu
 check "with its worktree" [ -d "$work/wt-murky-tab" ]
 run "$scripts/retire.sh" murky-tab
 check "and retires it once herdr answers" [ "$status" -eq 0 ]
-run env "${herdr_env[@]}" FAKE_HERDR_TAB=w9:t11 "$scripts/spawn.sh" dead-herdr <<'BRIEF'
+run env "${herdr_env[@]}" FAKE_HERDR_TAB=w9:t11 "$scripts/spawn.sh" --effort high dead-herdr <<'BRIEF'
 Task.
 BRIEF
 run env FAKE_HERDR_CLOSE_FAIL=1 FAKE_HERDR_NO_SERVER=1 "$scripts/retire.sh" dead-herdr
 check "a tab worker whose herdr server is not running is retired" [ "$status" -eq 0 ]
-run env TMUX=/tmp/fake-tmux,1,0 FAKE_TMUX_WINDOW=@11 FAKE_TMUX_LIVE=1 "$scripts/spawn.sh" nosock-window <<'BRIEF'
+run env TMUX=/tmp/fake-tmux,1,0 FAKE_TMUX_WINDOW=@11 FAKE_TMUX_LIVE=1 "$scripts/spawn.sh" --effort high nosock-window <<'BRIEF'
 Task.
 BRIEF
 echo '[]' > "$FAKE_AGENTS"
 run env FAKE_TMUX_KILL_FAIL=1 FAKE_TMUX_NO_SOCKET=1 "$scripts/retire.sh" nosock-window
 check "a tmux worker whose server socket is gone is retired" [ "$status" -eq 0 ]
-run env TMUX=/tmp/fake-tmux,1,0 FAKE_TMUX_WINDOW=@14 FAKE_TMUX_LIVE=1 "$scripts/spawn.sh" murky-window <<'BRIEF'
+run env TMUX=/tmp/fake-tmux,1,0 FAKE_TMUX_WINDOW=@14 FAKE_TMUX_LIVE=1 "$scripts/spawn.sh" --effort high murky-window <<'BRIEF'
 Task.
 BRIEF
 echo '[]' > "$FAKE_AGENTS"
@@ -726,7 +739,7 @@ check "and retires it once tmux answers" [ "$status" -eq 0 ]
 
 # A spawn cut short after its window opened still leaves a record retire.sh can finish from.
 echo "Task." | env CLAUDE_CODE_SESSION_ID=lead-1 CLAUDE_PID="$p_lead" TMUX=/tmp/fake-tmux,1,0 FAKE_TMUX_WINDOW=@12 \
-  ANDERTON_START_WAIT=30 "$scripts/spawn.sh" cut-short >/dev/null 2>&1 &
+  ANDERTON_START_WAIT=30 "$scripts/spawn.sh" --effort high cut-short >/dev/null 2>&1 &
 cut=$!
 for _ in $(seq 1 100); do
   if jq -e '.launcher == "tmux"' "$CLAUDE_CONFIG_DIR/anderton/workers/cut-short.json" >/dev/null 2>&1; then break; fi
