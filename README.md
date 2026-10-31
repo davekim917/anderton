@@ -204,6 +204,8 @@ starts a worker: a full Claude Code session named `<name>`, in a new git worktre
 - `--effort` is required (`low`, `medium`, `high`, `xhigh` or `max`), so a worker never runs at the
   default just because nobody chose. The Anderton picks it from your request and says so; a level you
   name wins.
+- Workers run on Opus unless `--model` names another, whatever your Claude Code default is. The
+  Anderton passes `--model` only when you name a model.
 - The brief, from the file or stdin, gets a closing rule: report to the caller by name with
   SendMessage, and don't deploy, restart or message anyone off the machine unless the task says to.
 - The worker is recorded in `~/.claude/anderton/workers/<name>.json`, with the herdr or tmux server

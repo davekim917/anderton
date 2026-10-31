@@ -460,6 +460,13 @@ check "with the brief" grep -qF "Fix the login redirect." "$FAKE_LOG.bg"
 check "telling it to report to the caller by name" grep -qF 'Tell "lead-session" by SendMessage' "$FAKE_LOG.bg"
 check "recording its id, which claude stop and rm take" [ "$(jq -r .id "$CLAUDE_CONFIG_DIR/anderton/workers/fix-login.json")" = a1b2c3d4 ]
 check "at the effort it was given" [ "$(grep -A1 -x -- --effort "$FAKE_LOG.bg" | tail -n 1)" = high ]
+check "on Opus when no model is named" [ "$(grep -A1 -x -- --model "$FAKE_LOG.bg" | tail -n 1)" = opus ]
+run "$scripts/spawn.sh" --effort high --model fable named-model <<'BRIEF'
+Task.
+BRIEF
+check "on the model the caller names instead" [ "$(grep -A1 -x -- --model "$FAKE_LOG.bg" | tail -n 1)" = fable ]
+check "and passes one model, not two" [ "$(grep -cx -- --model "$FAKE_LOG.bg")" -eq 1 ]
+run "$scripts/retire.sh" named-model
 rm -f "$FAKE_LOG.bg"
 for bad in "" "--effort turbo"; do
   # shellcheck disable=SC2086 # split on purpose: an empty $bad is no flag at all
@@ -577,7 +584,7 @@ check "in a new tab of the caller's workspace" grep -qx -- "w9" "$FAKE_LOG.tab"
 check "opened on its worktree" grep -qx -- "$work/wt-tab-worker" "$FAKE_LOG.tab"
 check "labelled with its name" grep -qx -- "tab-worker" "$FAKE_LOG.tab"
 check "passing on the caller's Claude home, which the tab would not inherit" grep -qx -- "CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR" "$FAKE_LOG.tab"
-check "running claude in that tab's pane" [ "$(tr '\n' ' ' < "$FAKE_LOG.start")" = "agent start tab-worker --kind claude --pane w9:p5 --timeout 120000 -- -n tab-worker --permission-mode acceptEdits --effort high " ]
+check "running claude in that tab's pane" [ "$(tr '\n' ' ' < "$FAKE_LOG.start")" = "agent start tab-worker --kind claude --pane w9:p5 --timeout 120000 -- -n tab-worker --permission-mode acceptEdits --effort high --model opus " ]
 check "given the brief" grep -qF "Tidy the README." "$FAKE_LOG.prompt"
 check "and told to report to the caller by name" grep -qF 'Tell "lead-session" by SendMessage' "$FAKE_LOG.prompt"
 check "not started in the background" [ ! -e "$FAKE_LOG.bg" ]
@@ -639,7 +646,7 @@ Tidy the changelog.
 BRIEF
 check "inside tmux, spawn.sh starts the worker" [ "$status" -eq 0 ]
 check "in a new window, detached, named for it, on its worktree, running claude in the caller's mode" \
-  [ "$(head -n 18 "$FAKE_LOG.window" | tr '\n' ' ')" = "new-window -d -P -F #{window_id} -n tmux-worker -c $work/wt-tmux-worker -e CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR claude -n tmux-worker --permission-mode acceptEdits --effort high " ]
+  [ "$(head -n 20 "$FAKE_LOG.window" | tr '\n' ' ')" = "new-window -d -P -F #{window_id} -n tmux-worker -c $work/wt-tmux-worker -e CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR claude -n tmux-worker --permission-mode acceptEdits --effort high --model opus " ]
 check "with the brief and its report-by-name rule as one argument" grep -qF 'Tell "lead-session" by SendMessage' "$FAKE_LOG.window"
 check "not started in the background" [ ! -e "$FAKE_LOG.bg" ]
 check "recording its window and tmux server, which retire.sh kills it in" [ "$(jq -r '"\(.launcher) \(.tab) \(.socket)"' "$CLAUDE_CONFIG_DIR/anderton/workers/tmux-worker.json")" = "tmux @7 /tmp/fake-tmux" ]

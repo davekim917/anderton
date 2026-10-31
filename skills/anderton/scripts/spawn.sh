@@ -4,7 +4,7 @@
 # tab, inside tmux in a new window, where the user can watch it and type into it; elsewhere, or with --bg, it runs
 # in the background. $ANDERTON_START_WAIT (seconds, default 30) bounds the wait for a tmux worker to register.
 # usage: spawn.sh --effort LEVEL [--bg] [--model M] [--mode MODE] [--base REF] <name> [brief-file]   (else the brief on stdin)
-# Worktrees go under $ANDERTON_WORKTREES, default the folder that holds the repository, as wt-<name>.
+# Workers run on Opus unless --model names another. Worktrees go under $ANDERTON_WORKTREES, default the folder that holds the repository, as wt-<name>.
 # Portable to macOS's bash 3.2 and BSD userland.
 set -euo pipefail
 # shellcheck source=SCRIPTDIR/session-lib.sh
@@ -150,8 +150,7 @@ failed() {
   exit 1
 }
 
-set -- -n "$name" --permission-mode "$mode" --effort "$effort"
-[ -z "$model" ] || set -- "$@" --model "$model"
+set -- -n "$name" --permission-mode "$mode" --effort "$effort" --model "${model:-opus}"
 # A tab or window id is unique only within its server, so the record keeps which server it was opened in.
 id="" tab="" socket="" server=""
 if [ "$launcher" = herdr ]; then
