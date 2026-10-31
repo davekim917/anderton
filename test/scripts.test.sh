@@ -1208,6 +1208,44 @@ tall_dialog " ❯ 2. Yes, and always allow access" "pnpm lint"
 refused_session "a tall dialog with the cursor on always allow" "does not show a prompt"
 tall_dialog " ❯ 1. Yes, and don't ask again for: pnpm commands" "pnpm lint"
 refused_session "a tall dialog whose only yes widens permissions" "does not show a prompt"
+# The dialogs below are real ones: a permission rule or a hook says why it asks, between the command and the question.
+reason_dialog() { # reason_dialog <reason lines, one argument each> -- <cursor line>: the options as a rule's dialog draws them
+  local rule="──────────────────────────────" cursor
+  {
+    printf ' │ pnpm test --filter api\n │ pnpm lint\n╌╌╌╌╌╌╌╌╌╌\n'
+    while [ "$1" != -- ]; do
+      printf '%s\n' "$1"
+      shift
+    done
+    cursor=$2
+    printf '\n Do you want to proceed?\n%s\n' "$cursor"
+    if [ "$cursor" = " ❯ 1. Yes" ]; then printf '   2. No\n'; else printf ' ❯ 2. No\n'; fi
+    printf '\n Esc to cancel · Tab to amend\n%s blocked-one ──\n' "$rule"
+  } > "$screen"
+}
+rule_reason=(" │ Permission rule Bash(*node_modules/.bin/vitest*) requires" " │ confirmation for this command." " /permissions to update rules")
+hook_reason=(" │ Hook PreToolUse:Bash requires" " │ confirmation for this command:" " │ live test reason [settings]" " settings.json to update hooks")
+: > "$transcript"
+tool_call toolu_1 Bash "$full"
+reason_dialog "${rule_reason[@]}" -- " ❯ 1. Yes"
+prompt blocked-one
+check "a tall dialog with a permission rule's reason reads in full" eval '[ "$status" -eq 0 ] && contains "rm -rf build" && contains "pnpm lint"'
+check "  and shows the reason" eval 'contains "Permission rule Bash(*node_modules/.bin/vitest*) requires" && contains "/permissions to update rules"'
+check "  and the question and options" eval 'contains "Do you want to proceed?" && contains " ❯ 1. Yes" && contains "2. No"'
+check "  and reading presses nothing" [ -z "$(pressed)" ]
+reason_dialog "${hook_reason[@]}" -- " ❯ 1. Yes"
+prompt blocked-one
+check "a tall dialog with a hook's reason reads in full" eval '[ "$status" -eq 0 ] && contains "rm -rf build" && contains "live test reason"'
+reason_dialog "${rule_reason[@]}" -- "   1. Yes"
+refused_session "a tall dialog with a reason and the cursor on No" "does not show a prompt"
+reason_dialog " ❯ 1. Yes" -- "   1. Yes"
+refused_session "a cursor in the reason while the real cursor is on No" "does not show a prompt"
+reason_dialog " ❯ 1. Yes" -- "   1. Yes"
+sed -i.bak 's/^ ❯ 2\. No$/   2. No/' "$screen"
+refused_session "a cursor only in the reason" "does not show a prompt"
+reason_dialog "${rule_reason[@]}" -- " ❯ 1. Yes"
+sed -i.bak '/Do you want to proceed/d' "$screen"
+refused_session "a tall dialog with no question" "does not show a prompt"
 rm -f "$transcript"
 dialog "x"
 jq -c '.kind = "bg"' "$f" > "$f.tmp"; mv "$f.tmp" "$f"

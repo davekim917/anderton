@@ -58,8 +58,9 @@ prompt_block() {
 
 # A dialog taller than its screen has lost its top, and no read brings it back: tmux's history holds only older
 # frames, whose rules would pass for its edge, and herdr refuses to read further while the agent is blocked. For such a
-# screen this prints one part of what is left: "command", the lines above the options, or "options", down to "Esc to
-# cancel". The cursor rule is prompt_block's. Dashed rules, like solid ones, start at column 0 and a command's lines
+# screen this prints one part of what is left: "command", the lines above the last dashed rule, or "options", from
+# there down to "Esc to cancel", which starts with the reason a permission rule or a hook gave for asking. The cursor
+# rule is prompt_block's, among the lines after the question. Dashed rules, like solid ones, start at column 0 and a command's lines
 # are indented, so a rule a model writes cannot end the command early.
 clipped_dialog() {
   LC_ALL=C awk -v rule="──────────" -v dash="╌╌╌╌╌╌╌╌╌╌" -v part="$1" '
@@ -70,9 +71,11 @@ clipped_dialog() {
       if (end == 0 || line[end] !~ /^ *Esc to cancel/) exit
       options = end
       while (options > 0 && index(line[options], dash) != 1) options--
-      if (options == 0 || line[options + 1] !~ /^ *Do you want to proceed\?$/) exit
+      if (options == 0) exit
+      question = options + 1
+      while (question < end && line[question] !~ /^ *Do you want to proceed\?$/) question++
       cursor = ""
-      for (i = options + 1; i <= end; i++) {
+      for (i = question + 1; i <= end; i++) {
         t = line[i]
         sub(/^ */, "", t)
         if (index(t, "❯") == 1) cursor = t
