@@ -88,46 +88,51 @@ clipped_dialog() {
     }'
 }
 
-# The one tool call the session's transcript leaves unanswered, as JSON, when that call is a Bash command. Nothing
-# when there is none, or several: the dialog on screen could be any of them.
-pending_bash() {
-  local t
+# Every tool call the session's transcripts leave unanswered, one JSON object a line: its own, and those of its
+# sub-agents and workflow agents, which ask through its screen. A transcript that can't be read counts as a call of
+# unknown kind, since it could be hiding one.
+unanswered_calls() {
+  local t f
   for t in "$home"/projects/*/"$sid".jsonl; do
     [ -f "$t" ] || continue
-    tail -n 1000 "$t" | jq -sc '
-      [.[] | select(.type == "user") | .message.content | arrays | .[] | select(.type? == "tool_result") | .tool_use_id] as $done
-      | [.[] | select(.type == "assistant") | .message.content | arrays | .[] | select(.type? == "tool_use") | select(.id as $id | ($done | index($id)) == null)]
-      | if length == 1 and .[0].name == "Bash" and (.[0].input.command | type) == "string" then .[0] else empty end' 2>/dev/null || true
+    { printf '%s\n' "$t"; find "${t%.jsonl}/subagents" -name 'agent-*.jsonl' -mmin -2880 2>/dev/null || true; } |
+      while IFS= read -r f; do
+        tail -n 1000 "$f" | jq -sc '
+          [.[] | select(.type == "user") | .message.content | arrays | .[] | select(.type? == "tool_result") | .tool_use_id] as $done
+          | .[] | select(.type == "assistant") | .message.content | arrays | .[] | select(.type? == "tool_use")
+          | select(.id as $id | ($done | index($id)) == null)' 2>/dev/null || echo '{"name":"unreadable"}'
+      done
     return 0
   done
 }
 
-# What is left of a text once the terminal's wrapping, indents and gutter no longer matter.
-squeezed() {
-  LC_ALL=C sed 's/│//g' | tr -d '[:space:]'
+# The one Bash call waiting whose command ends with the lines on screen ($1), which ignores the terminal's wrapping,
+# indents and gutter. Nothing when none or several do, or when a call of another kind is waiting: a clipped dialog
+# hides its title, so it could be that call. Agent, Task and Workflow only wait on calls of their own.
+matching_call() {
+  unanswered_calls | jq -sc --arg shown "$1" '
+    def squeezed: gsub("[[:space:]│]"; "");
+    ($shown | squeezed) as $tail
+    | if $tail == "" or any(.[]; .name as $n | ["Bash", "Agent", "Task", "Workflow"] | index($n) == null) then empty
+      else [.[] | select(.name == "Bash" and (.input.command | type) == "string" and (.input.command | squeezed | endswith($tail)))]
+        | if length == 1 then .[0] else empty end
+      end' 2>/dev/null || true
 }
 
 # Sets $text and $call to the full prompt of a dialog taller than $screen, from the session's transcript, and $clipped
 # when the screen shows such a dialog.
-# Only a Bash command, whose exact text the transcript records. The lines still on screen must be where that command
-# ends, which proves the transcript's pending call is the one this dialog is asking about.
+# Only a Bash command, whose exact text the transcript records.
 read_clipped() {
-  local shown options pending command description
+  local shown options pending
   options=$(printf '%s\n' "$screen" | clipped_dialog options)
   [ -n "$options" ] || return 0
   clipped=1
-  shown=$(printf '%s\n' "$screen" | clipped_dialog command | squeezed)
-  pending=$(pending_bash)
-  if [ -z "$shown" ] || [ -z "$pending" ]; then return 0; fi
-  command=$(printf '%s' "$pending" | jq -r '.input.command')
-  case $(printf '%s' "$command" | squeezed) in
-    *"$shown") ;;
-    *) return 0 ;;
-  esac
-  description=$(printf '%s' "$pending" | jq -r '.input.description // empty')
+  shown=$(printf '%s\n' "$screen" | clipped_dialog command)
+  pending=$(matching_call "$shown")
+  [ -n "$pending" ] || return 0
   call=$(printf '%s' "$pending" | jq -r '.id')
   text=$(printf ' Bash command, read in full from the session'"'"'s transcript: its dialog is taller than the screen\n %s\n\n%s\n\n%s' \
-    "$description" "$command" "$options")
+    "$(printf '%s' "$pending" | jq -r '.input.description // empty')" "$(printf '%s' "$pending" | jq -r '.input.command')" "$options")
 }
 
 # True when the screen on stdin ends in a dialog of any kind, answerable or not.
