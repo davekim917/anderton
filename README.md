@@ -233,8 +233,9 @@ fingerprint. On your answer it re-reads the screen, refuses unless the prompt is
 Enter (`yes`, this one call) or Esc (`no`), and confirms from the screen that the prompt closed. It
 refuses a cursor not on a plain "1. Yes", so it can't pick "always allow". A dialog taller than its
 screen has lost its top, and neither herdr nor tmux can bring it back, so for a Bash command it reads
-the full text from the session's transcript, and only if that session has one call waiting and the
-lines still on screen are where that command ends. It shows the reason a permission rule or hook
+the full text from the transcripts of the session and its sub-agents and workflow agents. It does so
+only if exactly one waiting Bash call ends with the lines still on screen, and no call of another
+kind is waiting, since a clipped dialog hides its title. It shows the reason a permission rule or hook
 gave, from the screen. A hook that rewrites a command above those lines
 wouldn't show. Any other dialog taller than its screen is refused. Only a session holding an Anderton role in the target's project can run it. That your
 word triggers it is an instruction to the Anderton, not something the script can prove, and a

@@ -265,6 +265,20 @@ check "  and shows the reason" contains "live test"
 answer live-hook no "$(fingerprint_of)"
 check "  and no refuses it" eval '[ "$status" -eq 0 ] && never_ran hook-marker-01'
 
+# A sub-agent asks through the session's screen, and its command is only in its own transcript.
+start_session live-sub
+t resize-window -t "live:live-sub" -x 40 -y 16
+sleep 1
+t send-keys -t "live:live-sub" -l "Use the Agent tool once, with subagent_type general-purpose. Tell it to run exactly this Bash command and nothing else, with no commentary: touch $(seq -f 'sub-marker-%02g' 1 30 | tr '\n' ' ')"
+sleep 1
+t send-keys -t "live:live-sub" Enter
+wait_blocked live-sub
+sleep 2
+answer live-sub
+check "a sub-agent's tall dialog reads in full" eval '[ "$status" -eq 0 ] && contains "sub-marker-01" && contains "sub-marker-30"'
+answer live-sub no "$(fingerprint_of)"
+check "  and no refuses it" eval '[ "$status" -eq 0 ] && never_ran sub-marker-01'
+
 # A real herdr tab, when this runs inside herdr.
 if [ -n "${HERDR_SOCKET_PATH:-}" ] && [ -n "${HERDR_WORKSPACE_ID:-}" ] && [ -z "${LIVE_TMUX_ONLY:-}" ]; then
   created=$(herdr tab create --workspace "$HERDR_WORKSPACE_ID" --cwd "$repo" --label live-h --no-focus)
