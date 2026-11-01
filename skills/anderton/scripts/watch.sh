@@ -25,33 +25,52 @@ key=$(basename "$record" .json)
 watcher="$holders/$key.watch"
 # Per holder: an earlier holder's last pass must not record a block this holder has not heard about.
 reported="$holders/$key.$pid.reported"
+reported_keep=200
 tick=${ANDERTON_WATCH_TICK:-30}
 mkdir -p "$holders" 2>/dev/null || exit 0
 [ -w "$holders" ] || exit 0
-take_watch() { (set -C; printf '%s %s\n' "$$" "$pid" > "$watcher") 2>/dev/null; }
+take_watch() { (set -C; printf '%s %s %s\n' "$$" "$pid" "$PPID" > "$watcher") 2>/dev/null; }
+watch_owner() { local p=""; { read -r p _ < "$watcher"; } 2>/dev/null; printf '%s' "$p"; }
+# Claude Code hears a hook's exit through the process that started it, so a watch that lost that process wakes no one.
+orphaned() { # orphaned <pid> <the parent it started under>
+  local now
+  now=$(ps -o ppid= -p "$1" 2>/dev/null)
+  [ -n "$now" ] && [ "$now" -ne "$2" ]
+}
 until take_watch; do
   is_holder "$reg" "$record" || exit 0
-  read -r other owner < "$watcher" 2>/dev/null
-  case $(ps -o command= -p "${other:-0}" 2>/dev/null) in
+  other=""; owner=""; parent=""
+  { read -r other owner parent < "$watcher"; } 2>/dev/null
+  # -ww: ps cuts its output at COLUMNS even into a pipe, and a cut path makes a live watch look dead.
+  case $(ps -ww -o command= -p "${other:-0}" 2>/dev/null) in
     *watch.sh*)
-      # A watch for this holder keeps the job. An earlier holder's leaves within a tick of losing the role.
-      [ "$owner" != "$pid" ] || exit 0
-      sleep "$tick"
+      if orphaned "$other" "${parent:-0}"; then
+        rm -f "$watcher"
+      else
+        # A watch for this holder keeps the job. An earlier holder's leaves within a tick of losing the role.
+        [ "$owner" != "$pid" ] || exit 0
+        sleep "$tick"
+      fi
       ;;
     *) rm -f "$watcher" ;;
   esac
 done
-trap 'rm -f "$watcher"' EXIT
+trap '[ "$(watch_owner)" != "$$" ] || rm -f "$watcher"' EXIT
 
 find "$holders" -maxdepth 1 -name "$key.*.reported" ! -path "$reported" -exec rm -f {} + 2>/dev/null
 : >> "$reported" || exit 0
 export CLAUDE_PID="$pid"
 while is_holder "$reg" "$record"; do
-  # A block's header carries when it began, so one that clears and returns is reported again.
+  if orphaned "$$" "$PPID"; then exit 0; fi
+  # Only the lock's owner watches: a watch that lost it leaves, and one whose lock vanished takes it back.
+  if [ "$(watch_owner)" != "$$" ] && ! take_watch; then exit 0; fi
   now=$(cd "$cwd" 2>/dev/null && "$(dirname "$0")/waiting.sh" --blocked 2>/dev/null | grep '^=== ')
   new=$(printf '%s\n' "$now" | grep -vxF -f "$reported" | grep .)
-  printf '%s\n' "$now" > "$reported"
   if [ -n "$new" ]; then
+    # Append only, so a scan that misses a block cannot make it new again. A block that clears and returns has a
+    # new start time in its header, so it is still reported.
+    printf '%s\n' "$new" >> "$reported"
+    tail -n "$reported_keep" "$reported" > "$reported.tmp" && mv "$reported.tmp" "$reported"
     {
       echo "Anderton watch: another session in this project is blocked on a person. Nothing has been answered or approved."
       printf '%s\n' "$new"

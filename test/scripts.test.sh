@@ -903,6 +903,109 @@ registry "$p_wa" waiting "input needed"
 set +e; wait "$watcher_pid"; status=$?; set -e
 check "the same session blocking again wakes the holder" [ "$status" -eq 2 ] && grep -qF "(waiting: input needed" "$work/watch.out"
 
+watch_gone() { # watch_gone <pid>: true once the watch has left, within three seconds
+  for _ in $(seq 1 30); do
+    kill -0 "$1" 2>/dev/null || return 0
+    sleep 0.1
+  done
+  return 1
+}
+watch_owner() { owner=""; { read -r owner _ < "$watcher_file"; } 2>/dev/null || true; }
+
+# A scan that misses a block cannot make it new again. Only a new start time can.
+block_file="$CLAUDE_CONFIG_DIR/sessions/$p_wa.json"
+block=$(cat "$block_file")
+watch_start wh-1
+sleep 0.5
+printf '%s\n' "$block" | jq -c '.status = "idle"' > "$block_file.tmp"
+mv "$block_file.tmp" "$block_file"
+sleep 1
+printf '%s\n' "$block" > "$block_file.tmp"
+mv "$block_file.tmp" "$block_file"
+sleep 1
+check "a block one scan missed does not wake the holder when it returns" kill -0 "$watcher_pid"
+check "and says nothing" [ ! -s "$work/watch.out" ]
+now_ms=$((now_ms + 1000))
+registry "$p_wa" waiting "input needed"
+set +e; wait "$watcher_pid"; status=$?; set -e
+check "the same session with a new start time does wake it" [ "$status" -eq 2 ]
+check "once" [ "$(grep -c '^=== other ' "$work/watch.out")" -eq 1 ]
+
+# ps cuts its output at COLUMNS even into a pipe, which must not make a live watch look dead.
+watch_start wh-1
+first=$watcher_pid
+watch_in wh-1 "$watched" | COLUMNS=20 "$scripts/watch.sh" > "$work/watch2.out" 2>&1 &
+second=$!
+sleepers="$sleepers $second"
+check "a second watch leaves however narrow the terminal" watch_gone "$second"
+watch_owner
+check "and the first keeps the lock" [ "$owner" = "$first" ]
+
+# Only the lock's owner watches.
+printf '%s %s\n' "$p_wb" "$p_wh" > "$watcher_file"
+check "a watch that lost its lock leaves" watch_gone "$first"
+watch_owner
+check "and leaves the new owner's lock" [ "$owner" = "$p_wb" ]
+rm -f "$watcher_file"
+watch_start wh-1
+rm -f "$watcher_file"
+for _ in $(seq 1 30); do
+  [ ! -s "$watcher_file" ] || break
+  sleep 0.1
+done
+watch_owner
+check "a watch whose lock vanished takes it back" [ "$owner" = "$watcher_pid" ]
+now_ms=$((now_ms + 1000))
+registry "$p_wa" waiting "permission prompt"
+set +e; wait "$watcher_pid"; set -e
+
+# Claude Code starts a hook under `sh -c`. Killing that wrapper leaves the script running with no one to hear its exit.
+watch_wrapped() { # sets $wrapper_pid, and $watcher_pid to the script under it
+  watch_in wh-1 "$watched" | sh -c '"$0"; exit $?' "$scripts/watch.sh" > "$work/watch.out" 2>&1 &
+  wrapper_pid=$!
+  sleepers="$sleepers $wrapper_pid"
+  owner=""
+  for _ in $(seq 1 30); do
+    watch_owner
+    if [ -n "$owner" ]; then break; fi
+    sleep 0.1
+  done
+  watcher_pid=$owner
+  sleepers="$sleepers $watcher_pid"
+}
+kill_wrapper() {
+  kill -9 "$wrapper_pid"
+  wait "$wrapper_pid" 2>/dev/null || true
+}
+watch_wrapped
+kill_wrapper
+check "a watch that lost its hook leaves" watch_gone "$watcher_pid"
+check "and frees its lock" [ ! -e "$watcher_file" ]
+
+# Between scans the orphan cannot notice for itself, so only the next Stop can.
+export ANDERTON_WATCH_TICK=2
+watch_wrapped
+export ANDERTON_WATCH_TICK=0.05
+for _ in $(seq 1 30); do
+  if pgrep -P "$watcher_pid" -x sleep > /dev/null; then break; fi
+  sleep 0.1
+done
+kill_wrapper
+now_ms=$((now_ms + 1000))
+registry "$p_wa" waiting "permission prompt"
+watch_run wh-1
+check "the next Stop replaces it, so the holder still hears a new block" [ "$status" -eq 2 ] && [ -n "$out" ]
+check "and it leaves too" watch_gone "$watcher_pid"
+
+# The reported list is capped, and the newest block survives the cap.
+reported_file="${holder_file%.json}.$p_wh.reported"
+seq 1 300 | sed 's/^/=== long gone /' >> "$reported_file"
+now_ms=$((now_ms + 1000))
+registry "$p_wa" waiting "input needed"
+watch_run wh-1
+check "the reported list stays capped" [ "$(wc -l < "$reported_file")" -le 200 ]
+check "and keeps the newest block" grep -qF "=== other  $watched  (waiting: input needed" "$reported_file"
+
 # A holder in a scope is still a session the project's holder hears about.
 registry "$p_wb" waiting "permission prompt"
 watch_run wh-1
