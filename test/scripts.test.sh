@@ -1144,12 +1144,12 @@ tall_dialog() { # tall_dialog <cursor line> [command lines still on screen...]: 
     printf '\n Esc to cancel · Tab to amend\n%s blocked-one ──\n' "$rule"
   } > "$screen"
 }
-tool_call() { # tool_call <id> <tool> <command>: the session asks for a tool, as its transcript records it
+tool_call() { # tool_call <id> <tool> <command>: the session asks for a tool, as $target or its transcript records it
   jq -nc --arg i "$1" --arg n "$2" --arg c "$3" \
-    '{type: "assistant", message: {content: [{type: "tool_use", id: $i, name: $n, input: {command: $c, description: "Run the checks"}}]}}' >> "$transcript"
+    '{type: "assistant", message: {content: [{type: "tool_use", id: $i, name: $n, input: {command: $c, description: "Run the checks"}}]}}' >> "${target:-$transcript}"
 }
 tool_result() { # tool_result <id>: that call has its answer
-  jq -nc --arg i "$1" '{type: "user", message: {content: [{type: "tool_result", tool_use_id: $i, content: "ok"}]}}' >> "$transcript"
+  jq -nc --arg i "$1" '{type: "user", message: {content: [{type: "tool_result", tool_use_id: $i, content: "ok"}]}}' >> "${target:-$transcript}"
 }
 full=$(printf 'rm -rf build\npnpm test --filter api\npnpm lint')
 tall_dialog " ❯ 1. Yes" "pnpm test --fil" "ter api" "pnpm lint"
@@ -1251,7 +1251,7 @@ refused_session "a tall dialog with no question" "does not show a prompt"
 agent_call() { # agent_call <file under subagents> <id> <tool> <command>
   local file="${transcript%.jsonl}/subagents/$1"
   mkdir -p "$(dirname "$file")"
-  (transcript=$file; tool_call "$2" "$3" "$4")
+  target=$file tool_call "$2" "$3" "$4"
 }
 agents_reset() { rm -rf "${transcript%.jsonl}"; : > "$transcript"; }
 agents_reset
@@ -1290,7 +1290,7 @@ printf '{"type":"assis' > "${transcript%.jsonl}/subagents/agent-one.jsonl"
 refused_session "a tall dialog while an agent's transcript can't be read" "$tall_refused"
 agents_reset
 agent_call agent-one.jsonl toolu_1 Bash "$full"
-(transcript="${transcript%.jsonl}/subagents/agent-one.jsonl"; tool_result toolu_1)
+target="${transcript%.jsonl}/subagents/agent-one.jsonl" tool_result toolu_1
 refused_session "a tall dialog whose agent's call has its answer" "$tall_refused"
 agents_reset
 tool_call toolu_1 Bash "pnpm test --filter api
